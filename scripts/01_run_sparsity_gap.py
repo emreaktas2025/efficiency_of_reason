@@ -22,10 +22,49 @@ import os
 from pathlib import Path
 
 # Add src to path - more robust path handling
-project_root = Path(__file__).resolve().parent.parent
+# This ensures the script works regardless of where it's executed from
+script_dir = Path(__file__).resolve().parent
+project_root = script_dir.parent
 src_path = project_root / "src"
-if str(src_path) not in sys.path:
-    sys.path.insert(0, str(src_path))
+
+# Debug: Print paths (can be removed later)
+import os
+if os.getenv("DEBUG_PATHS"):
+    print(f"Script dir: {script_dir}")
+    print(f"Project root: {project_root}")
+    print(f"Source path: {src_path}")
+    print(f"Source path exists: {src_path.exists()}")
+    print(f"Current working directory: {Path.cwd()}")
+
+# Verify the path exists before adding
+if src_path.exists():
+    src_path_str = str(src_path)
+    if src_path_str not in sys.path:
+        sys.path.insert(0, src_path_str)
+        if os.getenv("DEBUG_PATHS"):
+            print(f"Added to sys.path: {src_path_str}")
+else:
+    # Fallback: try to find project root by looking for setup.py or README.md
+    current = Path.cwd()
+    found = False
+    for parent in [current] + list(current.parents):
+        potential_src = parent / "src" / "wor"
+        if potential_src.exists():
+            src_path_str = str(parent / "src")
+            if src_path_str not in sys.path:
+                sys.path.insert(0, src_path_str)
+                if os.getenv("DEBUG_PATHS"):
+                    print(f"Added to sys.path (fallback): {src_path_str}")
+            found = True
+            break
+    
+    if not found:
+        raise RuntimeError(
+            f"Could not find 'src' directory. Tried:\n"
+            f"  - {src_path}\n"
+            f"  - Searched from {current}\n"
+            f"Please ensure you're running from the project root or install with 'pip install -e .'"
+        )
 
 import torch
 from transformers import GenerationConfig
