@@ -93,22 +93,30 @@ def load_deepseek_r1_model(
     print(f"Using offload folder: {offload_folder}")
     
     # Set environment variables for more aggressive memory management
-    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
+    # Set before any CUDA operations
+    if "PYTORCH_CUDA_ALLOC_CONF" not in os.environ:
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
     
     try:
-        # Load model with quantization - remove conflicting parameters
-        # quantization_config already sets load_in_4bit, so don't set it again
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            quantization_config=quantization_config,
-            device_map=device_map,
-            low_cpu_mem_usage=True,  # Force True for memory efficiency
-            max_memory=max_memory if max_memory else None,
-            offload_folder=offload_folder,  # Offload to disk if needed
-            trust_remote_code=True,
-            torch_dtype=torch.float16,  # Use torch_dtype (not dtype)
-            use_cache=False,  # Disable KV cache during loading
-        )
+        # Try loading with minimal constraints first (since user has 251GB RAM)
+        # If that fails, we'll try with constraints
+        load_kwargs = {
+            "quantization_config": quantization_config,
+            "device_map": device_map,
+            "low_cpu_mem_usage": True,
+            "trust_remote_code": True,
+            "torch_dtype": torch.float16,
+            "use_cache": False,
+        }
+        
+        # Only add max_memory and offload_folder if max_memory is specified
+        # For systems with lots of RAM, these constraints might cause issues
+        if max_memory:
+            load_kwargs["max_memory"] = max_memory
+            load_kwargs["offload_folder"] = offload_folder
+        
+        print("Attempting to load model...")
+        model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
         
         # Clear cache after loading
         gc.collect()
