@@ -92,18 +92,25 @@ def load_deepseek_r1_model(
     offload_folder = tempfile.mkdtemp(prefix="model_offload_")
     print(f"Using offload folder: {offload_folder}")
     
+    # Set environment variables for more aggressive memory management
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
+    
     try:
+        # Try loading with more conservative settings
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             quantization_config=quantization_config,
             device_map=device_map,
-            low_cpu_mem_usage=low_cpu_mem_usage,
-            max_memory=max_memory,
+            low_cpu_mem_usage=True,  # Force True
+            max_memory=max_memory if max_memory else None,
             offload_folder=offload_folder,  # Offload to disk if needed
             trust_remote_code=True,
-            dtype=torch.float16,  # Fixed: use dtype instead of torch_dtype
+            dtype=torch.float16,
             use_cache=False,  # Disable KV cache during loading to save memory
             use_safetensors=True,  # Use safetensors for more efficient loading
+            # Additional memory-saving options
+            torch_dtype=torch.float16,  # Also set torch_dtype for compatibility
+            load_in_4bit=True,  # Explicitly set
         )
         
         # Clear cache after loading
