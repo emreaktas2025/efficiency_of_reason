@@ -115,44 +115,24 @@ def load_deepseek_r1_model_alternative(
         # 1.5B model in FP16 only needs ~3GB GPU VRAM, which should fit
         if use_direct_gpu_load:
             if is_small_model:
-                print("Loading 1.5B model - trying FP16 first, then 8-bit quantization if needed...")
-                # Try FP16 first, but if it fails, use 8-bit quantization to reduce CPU RAM during load
-                try:
-                    # First attempt: FP16 with very small chunks and no memory limits
-                    print("  Attempt 1: FP16 with 200MB chunks, no CPU memory limits...")
-                    model = AutoModelForCausalLM.from_pretrained(
-                        model_name,
-                        device_map="auto",
-                        trust_remote_code=True,
-                        low_cpu_mem_usage=True,
-                        dtype=torch.float16,
-                        use_safetensors=True,
-                        max_memory=None,  # No limits
-                        offload_folder=None,  # No offloading
-                        max_shard_size="200MB",  # Very small chunks
-                    )
-                    print("✓ Model loaded successfully (FP16)")
-                except (RuntimeError, Exception) as e:
-                    error_str = str(e).lower()
-                    if "bad_alloc" in error_str or "memory" in error_str or "terminate" in error_str:
-                        print("  ⚠ FP16 failed - trying 8-bit quantization (reduces CPU RAM during load)...")
-                        # Fallback: Use 8-bit quantization - this reduces the model size during loading
-                        from transformers import BitsAndBytesConfig
-                        quantization_config = BitsAndBytesConfig(load_in_8bit=True)
-                        model = AutoModelForCausalLM.from_pretrained(
-                            model_name,
-                            quantization_config=quantization_config,
-                            device_map="auto",
-                            trust_remote_code=True,
-                            low_cpu_mem_usage=True,
-                            use_safetensors=True,
-                            max_memory=None,  # No limits for small model
-                            offload_folder=None,
-                            max_shard_size="200MB",
-                        )
-                        print("✓ Model loaded successfully (8-bit quantized)")
-                    else:
-                        raise
+                # For constrained containers, use 8-bit quantization from the start
+                # FP16 loading requires too much CPU RAM even with chunking
+                # 8-bit quantization reduces the model size during loading phase
+                print("Loading 1.5B model with 8-bit quantization (reduces CPU RAM during load)...")
+                from transformers import BitsAndBytesConfig
+                quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+                model = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    quantization_config=quantization_config,
+                    device_map="auto",
+                    trust_remote_code=True,
+                    low_cpu_mem_usage=True,
+                    use_safetensors=True,
+                    max_memory=None,  # No CPU limits for small model
+                    offload_folder=None,  # No offloading needed
+                    max_shard_size="200MB",  # Small chunks
+                )
+                print("✓ Model loaded successfully (8-bit quantized)")
                     elif "out of memory" in error_str or "cuda" in error_str:
                         print("⚠ GPU OOM - trying with device_map='auto'...")
                         model = AutoModelForCausalLM.from_pretrained(
