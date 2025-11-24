@@ -164,8 +164,25 @@ def run_experiment_1_enhanced(
     use_alternative = os.getenv("USE_ALTERNATIVE_LOADER", "false").lower() == "true"
     use_8bit = os.getenv("USE_8BIT_QUANTIZATION", "false").lower() == "true"
     
-    # Get model name from env or use default (8B for better research results)
-    model_name = os.getenv("DEEPSEEK_MODEL", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B")
+    # Get model name from env or use default
+    # Default to 1.5B model for better compatibility with constrained containers
+    # Use 8B model only if explicitly requested or if container has 48GB+ RAM
+    default_model = os.getenv("DEEPSEEK_MODEL")
+    if default_model is None:
+        # Check if hf_transfer is available (optional, for faster downloads)
+        try:
+            import hf_transfer
+            has_hf_transfer = True
+        except ImportError:
+            has_hf_transfer = False
+            # Disable hf_transfer if not available to avoid errors
+            if "HF_HUB_ENABLE_HF_TRANSFER" not in os.environ:
+                os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+        
+        # Default to 1.5B model for constrained containers
+        default_model = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+    
+    model_name = os.getenv("DEEPSEEK_MODEL", default_model)
     print(f"Using model: {model_name}")
     print()
     
