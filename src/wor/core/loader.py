@@ -96,21 +96,18 @@ def load_deepseek_r1_model(
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
     
     try:
-        # Try loading with more conservative settings
+        # Load model with quantization - remove conflicting parameters
+        # quantization_config already sets load_in_4bit, so don't set it again
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             quantization_config=quantization_config,
             device_map=device_map,
-            low_cpu_mem_usage=True,  # Force True
+            low_cpu_mem_usage=True,  # Force True for memory efficiency
             max_memory=max_memory if max_memory else None,
             offload_folder=offload_folder,  # Offload to disk if needed
             trust_remote_code=True,
-            dtype=torch.float16,
-            use_cache=False,  # Disable KV cache during loading to save memory
-            use_safetensors=True,  # Use safetensors for more efficient loading
-            # Additional memory-saving options
-            torch_dtype=torch.float16,  # Also set torch_dtype for compatibility
-            load_in_4bit=True,  # Explicitly set
+            torch_dtype=torch.float16,  # Use torch_dtype (not dtype)
+            use_cache=False,  # Disable KV cache during loading
         )
         
         # Clear cache after loading
