@@ -33,11 +33,26 @@ def parse_reasoning_output(text: str) -> Dict[str, str]:
         "has_reasoning": False,
     }
     
-    # Pattern to match <think>...</think> tags
-    # DeepSeek-R1 uses <think> tags (the model's actual output format)
-    pattern = r'<think>(.*?)</think>'
+    # Try multiple tag formats that DeepSeek-R1 might use
+    # DeepSeek-R1 models can output different tag formats depending on the version
+    # Pattern 1: <think>...</think> (common format)
+    # Pattern 2: <think>...</think> (mentioned in research plan)
+    # Pattern 3: <reasoning>...</reasoning> (alternative variant)
     
-    match = re.search(pattern, text, re.DOTALL)
+    patterns = [
+        (r'<think>(.*?)</think>', '<think>', '</think>'),
+        (r'<think>(.*?)</think>', '<think>', '</think>'),
+        (r'<reasoning>(.*?)</reasoning>', '<reasoning>', '</reasoning>'),
+    ]
+    
+    match = None
+    used_pattern = None
+    
+    for pattern, start_tag, end_tag in patterns:
+        match = re.search(pattern, text, re.DOTALL)
+        if match:
+            used_pattern = (start_tag, end_tag)
+            break
     
     if match:
         result["thinking_segment"] = match.group(1).strip()

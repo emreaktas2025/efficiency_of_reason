@@ -220,6 +220,7 @@ def run_experiment_1_enhanced(
     print("Step 3: Running inference and extracting metrics...")
     print()
     
+    skipped_no_reasoning = 0
     for i, problem in enumerate(tqdm(problems, desc="Processing problems")):
         prompt = problem['question']
         correct_answer = problem.get('answer', '')
@@ -233,6 +234,13 @@ def run_experiment_1_enhanced(
             parsed = parse_reasoning_output(full_text)
             
             if not parsed["has_reasoning"]:
+                skipped_no_reasoning += 1
+                # Debug: print first skipped output to see what format we're getting
+                if skipped_no_reasoning == 1:
+                    print(f"\n⚠ Warning: Generated output doesn't contain reasoning tags.")
+                    print(f"  First {min(200, len(generated))} chars of output:")
+                    print(f"  {repr(generated[:200])}")
+                    print(f"  Looking for: <think>...</think>")
                 continue
             
             # Get attention states
@@ -304,6 +312,8 @@ def run_experiment_1_enhanced(
     
     print(f"\n✓ Processed {len(all_results)} problems successfully")
     print(f"  Correct: {len(correct_results)}, Incorrect: {len(incorrect_results)}")
+    if skipped_no_reasoning > 0:
+        print(f"  ⚠ Skipped {skipped_no_reasoning} problems (no reasoning tags found)")
     print()
     
     # Statistical Analysis
