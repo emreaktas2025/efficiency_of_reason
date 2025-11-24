@@ -42,15 +42,24 @@ def load_deepseek_r1_model(
     gc.collect()
     torch.cuda.empty_cache() if torch.cuda.is_available() else None
     
-    # Set default max_memory if not provided (limit CPU to 4GB to prevent bad_alloc)
+    # Set default max_memory if not provided
+    # Allow disabling CPU limit via environment variable for systems with more RAM
+    disable_cpu_limit = os.getenv("DISABLE_CPU_MEMORY_LIMIT", "false").lower() == "true"
+    
     if max_memory is None:
         max_memory = {}
         if torch.cuda.is_available():
             # Limit GPU memory (leave some headroom)
             gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
             max_memory[0] = f"{int(gpu_memory_gb * 0.85)}GiB"  # More conservative
+        
         # Limit CPU memory aggressively to prevent std::bad_alloc
-        max_memory["cpu"] = "4GiB"  # Reduced from 8GiB
+        # Can be disabled with DISABLE_CPU_MEMORY_LIMIT=true env var
+        if not disable_cpu_limit:
+            max_memory["cpu"] = "4GiB"  # Reduced from 8GiB
+            print("CPU memory limited to 4GB (set DISABLE_CPU_MEMORY_LIMIT=true to disable)")
+        else:
+            print("CPU memory limit disabled (DISABLE_CPU_MEMORY_LIMIT=true)")
     
     print("Configuring 4-bit quantization (NF4)...")
     
