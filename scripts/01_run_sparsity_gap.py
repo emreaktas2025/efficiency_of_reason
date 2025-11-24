@@ -71,6 +71,7 @@ from transformers import GenerationConfig
 from tabulate import tabulate
 
 from wor.core import load_deepseek_r1_model
+from wor.core.loader_alternative import load_deepseek_r1_model_alternative
 from wor.data import parse_reasoning_output, get_token_indices_for_segments
 from wor.metrics import calculate_metrics_for_segment
 
@@ -225,9 +226,32 @@ def run_experiment():
     
     # Load model
     print("Step 1: Loading model...")
-    model, tokenizer = load_deepseek_r1_model()
-    model.eval()
-    print()
+    
+    # Try standard loader first, fallback to alternative if it fails
+    use_alternative = os.getenv("USE_ALTERNATIVE_LOADER", "false").lower() == "true"
+    use_8bit_fallback = os.getenv("USE_8BIT_QUANTIZATION", "false").lower() == "true"
+    
+    try:
+        if use_alternative:
+            print("Using alternative loader (8-bit or no quantization)...")
+            model, tokenizer = load_deepseek_r1_model_alternative(use_8bit=use_8bit_fallback)
+        else:
+            model, tokenizer = load_deepseek_r1_model()
+        model.eval()
+        print()
+    except Exception as e:
+        print(f"\n⚠ Standard loader failed: {e}")
+        print("Trying alternative loader (8-bit quantization)...")
+        try:
+            model, tokenizer = load_deepseek_r1_model_alternative(use_8bit=True)
+            model.eval()
+            print()
+        except Exception as e2:
+            print(f"\n⚠ 8-bit quantization also failed: {e2}")
+            print("Trying without quantization (requires more memory)...")
+            model, tokenizer = load_deepseek_r1_model_alternative(use_8bit=False)
+            model.eval()
+            print()
     
     # Get prompts
     prompts = get_gsm8k_prompts()
