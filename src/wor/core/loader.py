@@ -36,9 +36,10 @@ def load_deepseek_r1_model(
     Raises:
         RuntimeError: If model loading fails
     """
-    # Default to smaller model for constrained environments
+    # Default to 8B model (better for research, works with 24GB+ VRAM)
+    # Use 1.5B only if explicitly set via DEEPSEEK_MODEL env var
     if model_name is None:
-        model_name = os.getenv("DEEPSEEK_MODEL", "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B")
+        model_name = os.getenv("DEEPSEEK_MODEL", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B")
     
     print(f"Loading model: {model_name}")
     

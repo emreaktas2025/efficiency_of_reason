@@ -164,8 +164,8 @@ def run_experiment_1_enhanced(
     use_alternative = os.getenv("USE_ALTERNATIVE_LOADER", "false").lower() == "true"
     use_8bit = os.getenv("USE_8BIT_QUANTIZATION", "false").lower() == "true"
     
-    # Get model name from env or use default (1.5B for lower memory)
-    model_name = os.getenv("DEEPSEEK_MODEL", "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B")
+    # Get model name from env or use default (8B for better research results)
+    model_name = os.getenv("DEEPSEEK_MODEL", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B")
     print(f"Using model: {model_name}")
     print()
     
