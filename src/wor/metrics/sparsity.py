@@ -140,18 +140,21 @@ def calculate_metrics_for_segment(
     start_idx: int,
     end_idx: int,
     threshold: float = 1e-3,
+    hidden_states: Optional[torch.Tensor] = None,
 ) -> dict:
     """
-    Calculate CUD and APE for a specific token segment.
+    Calculate CUD, APE, and optionally AE for a specific token segment.
     
     Args:
         attention_weights: Full attention tensor (num_layers, batch, num_heads, seq_len, seq_len)
         start_idx: Start token index (inclusive)
         end_idx: End token index (exclusive)
         threshold: Threshold for CUD calculation
+        hidden_states: Optional hidden states tensor (num_layers, batch, seq_len, hidden_size)
+                      If provided, AE will be calculated
         
     Returns:
-        Dictionary with 'cud' and 'ape' values
+        Dictionary with 'cud', 'ape', 'num_tokens', and optionally 'ae'
     """
     # Slice attention weights for the segment
     # attention_weights shape: (num_layers, batch, num_heads, seq_len, seq_len)
@@ -161,9 +164,18 @@ def calculate_metrics_for_segment(
     cud = calculate_cud(segment_attn, threshold=threshold, layer_wise=False)
     ape = calculate_ape(segment_attn, layer_wise=False)
     
-    return {
+    result = {
         "cud": cud,
         "ape": ape,
         "num_tokens": end_idx - start_idx,
     }
+    
+    # Calculate AE if hidden states provided
+    if hidden_states is not None:
+        # Import here to avoid circular import
+        from .activation_energy import calculate_ae_for_segment
+        ae_result = calculate_ae_for_segment(hidden_states, start_idx, end_idx)
+        result["ae"] = ae_result["ae"]
+    
+    return result
 
