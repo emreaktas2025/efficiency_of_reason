@@ -105,8 +105,9 @@ def load_deepseek_r1_model_alternative(
             
             if is_small_model:
                 print("Loading 1.5B model directly to GPU (FP16, no quantization)...")
-                print("  NO CPU memory limits - model needs ~6GB temp RAM during load")
+                print("  Using max_shard_size to load in smaller chunks (reduces peak CPU RAM)")
                 try:
+                    # Use max_shard_size to load in 500MB chunks - reduces peak CPU RAM
                     model = AutoModelForCausalLM.from_pretrained(
                         model_name,
                         device_map="cuda:0",  # Force immediate GPU load
@@ -114,11 +115,23 @@ def load_deepseek_r1_model_alternative(
                         low_cpu_mem_usage=True,
                         dtype=torch.float16,
                         use_safetensors=True,
+                        max_shard_size="500MB",  # Load in 500MB chunks
                     )
                     print("✓ Model loaded successfully (FP16 on GPU)")
                 except RuntimeError as e:
                     error_str = str(e).lower()
-                    if "out of memory" in error_str or "cuda" in error_str:
+                    if "bad_alloc" in error_str or "memory" in error_str:
+                        print("⚠ Still hitting memory limit - trying even smaller chunks (200MB)...")
+                        model = AutoModelForCausalLM.from_pretrained(
+                            model_name,
+                            device_map="cuda:0",
+                            trust_remote_code=True,
+                            low_cpu_mem_usage=True,
+                            dtype=torch.float16,
+                            use_safetensors=True,
+                            max_shard_size="200MB",  # Even smaller chunks
+                        )
+                    elif "out of memory" in error_str or "cuda" in error_str:
                         print("⚠ GPU OOM - trying with device_map='auto'...")
                         model = AutoModelForCausalLM.from_pretrained(
                             model_name,
@@ -127,6 +140,7 @@ def load_deepseek_r1_model_alternative(
                             low_cpu_mem_usage=True,
                             dtype=torch.float16,
                             use_safetensors=True,
+                            max_shard_size="500MB",
                         )
                     else:
                         raise
