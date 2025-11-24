@@ -53,13 +53,15 @@ checkpoints/
 models/
 weights/
 
-# Data
-data/
-datasets/
+# Data (but not package directories)
+/data/
+/datasets/
 *.csv
 *.json
 *.parquet
 *.hdf5
+# Allow src/wor/data package
+!src/wor/data/
 
 # Logs
 logs/
