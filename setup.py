@@ -2,12 +2,15 @@
 
 from setuptools import setup, find_packages
 
+# Explicitly find all packages including subpackages
+packages = find_packages(where="src", include=["wor", "wor.*"])
+
 setup(
     name="efficiency-of-reason",
     version="0.1.0",
     description="Quantifying the Computational Sparsity of Chain-of-Thought in Large Language Models",
     author="Emre Aktas",
-    packages=find_packages(where="src"),
+    packages=packages,
     package_dir={"": "src"},
     python_requires=">=3.8",
     install_requires=[
@@ -17,5 +20,8 @@ setup(
         "accelerate>=0.24.0",
         "tabulate>=0.9.0",
     ],
+    # Ensure all package data is included
+    include_package_data=True,
+    zip_safe=False,
 )
 
