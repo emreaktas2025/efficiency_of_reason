@@ -57,21 +57,32 @@ def load_deepseek_r1_model(
     # Allow disabling ALL memory limits via environment variable for systems with lots of RAM
     disable_cpu_limit = os.getenv("DISABLE_CPU_MEMORY_LIMIT", "false").lower() == "true"
     disable_all_limits = os.getenv("DISABLE_ALL_MEMORY_LIMITS", "false").lower() == "true"
-    
+
     if max_memory is None and not disable_all_limits:
         max_memory = {}
         if torch.cuda.is_available() and not disable_all_limits:
             # Limit GPU memory (leave some headroom)
             gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
             max_memory[0] = f"{int(gpu_memory_gb * 0.85)}GiB"  # More conservative
-        
+
         # Limit CPU memory - respect cgroup limit if present
         if not disable_cpu_limit:
             if cgroup_limit_gb:
-                # Use 80% of cgroup limit, leave headroom
-                cpu_limit_gb = int(cgroup_limit_gb * 0.8)
+                # CRITICAL: For 4-bit quantization in containers with limited RAM,
+                # we need to be VERY aggressive with CPU limits to avoid bad_alloc
+                # The issue: bitsandbytes needs CPU RAM during initial load before quantizing
+                # With 38GB container limit, even 30GB CPU allocation fails
+                # Solution: Limit to much smaller amount to force more disk offloading
+                if cgroup_limit_gb < 48:  # Less than 48GB total (i.e., container is memory-constrained)
+                    cpu_limit_gb = max(8, int(cgroup_limit_gb * 0.25))  # Use only 25% for CPU
+                    print(f"⚠ Container memory constrained ({cgroup_limit_gb:.1f}GB)")
+                    print(f"  Using aggressive CPU limit: {cpu_limit_gb}GB (25% of cgroup limit)")
+                    print(f"  This forces more offloading but prevents OOM errors")
+                else:
+                    cpu_limit_gb = int(cgroup_limit_gb * 0.8)
+                    print(f"Container has ample RAM ({cgroup_limit_gb:.1f}GB)")
                 max_memory["cpu"] = f"{cpu_limit_gb}GiB"
-                print(f"CPU memory limited to {cpu_limit_gb}GB (80% of cgroup limit)")
+                print(f"CPU memory limited to {cpu_limit_gb}GB")
             else:
                 max_memory["cpu"] = "4GiB"  # Default conservative limit
                 print("CPU memory limited to 4GB (set DISABLE_CPU_MEMORY_LIMIT=true to disable)")
@@ -131,23 +142,23 @@ def load_deepseek_r1_model(
             "trust_remote_code": True,
             "dtype": torch.float16,
         }
-        
+
         # Only add constraints if max_memory is specified
         if max_memory:
             load_kwargs["max_memory"] = max_memory
             if offload_folder:
                 load_kwargs["offload_folder"] = offload_folder
-        
+
         print("Attempting to load model...")
         print(f"Load kwargs: {list(load_kwargs.keys())}")
-        
+
         # Try loading - this might fail with bitsandbytes bug, but we'll catch it
         model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
-        
+
         # Clear cache after loading
         gc.collect()
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
-        
+
         # Clean up offload folder (model is now loaded)
         if offload_folder:
             try:
@@ -155,14 +166,15 @@ def load_deepseek_r1_model(
                 shutil.rmtree(offload_folder, ignore_errors=True)
             except:
                 pass
-        
+
         print("Model loaded successfully!")
         return model, tokenizer
+
     except Exception as e:
         # Clear cache on error
         gc.collect()
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
-        
+
         # Clean up offload folder on error
         if offload_folder:
             try:
@@ -170,6 +182,32 @@ def load_deepseek_r1_model(
                 shutil.rmtree(offload_folder, ignore_errors=True)
             except:
                 pass
-        
+
+        # Check if this is a memory error
+        error_str = str(e).lower()
+        is_memory_error = any(keyword in error_str for keyword in [
+            'bad_alloc', 'out of memory', 'oom', 'cannot allocate'
+        ])
+
+        if is_memory_error and cgroup_limit_gb and cgroup_limit_gb < 48:
+            print("\n" + "="*80)
+            print("MEMORY ERROR DETECTED - POSSIBLE SOLUTIONS:")
+            print("="*80)
+            print(f"\nYour container has {cgroup_limit_gb:.1f}GB RAM, which may be insufficient")
+            print("for 4-bit quantization of this 8B parameter model.\n")
+            print("Try one of these solutions:\n")
+            print("1. Use 8-bit quantization (less memory-efficient but more reliable):")
+            print("   export USE_ALTERNATIVE_LOADER=true")
+            print("   export USE_8BIT_QUANTIZATION=true")
+            print("   python scripts/01_run_sparsity_gap.py\n")
+            print("2. Disable CPU memory limits (risky - may cause system instability):")
+            print("   export DISABLE_ALL_MEMORY_LIMITS=true")
+            print("   python scripts/01_run_sparsity_gap.py\n")
+            print("3. Use a larger RunPod instance with 48GB+ RAM\n")
+            print("4. Try loading without quantization (requires ~32GB VRAM):")
+            print("   export USE_ALTERNATIVE_LOADER=true")
+            print("   python scripts/01_run_sparsity_gap.py")
+            print("="*80 + "\n")
+
         raise RuntimeError(f"Failed to load model: {e}") from e
 

@@ -2,55 +2,95 @@
 
 ## Memory Issues (`std::bad_alloc`)
 
-**IMPORTANT:** If you're running in a Docker container (like RunPod), check for **cgroup memory limits**:
+**CRITICAL:** The `std::bad_alloc` error means your system ran out of RAM during model loading.
+
+### Understanding the Problem
+
+When loading DeepSeek-R1-Distill-Llama-8B with 4-bit quantization:
+- The model requires ~16GB VRAM (GPU memory) after quantization
+- **BUT**: During loading, it needs significant CPU RAM for initialization
+- The bitsandbytes library loads the full model to CPU RAM first, THEN quantizes it
+- This creates a memory spike that can exceed your container limits
+
+### Check Your Memory Limits
+
+If you're running in a Docker container (like RunPod), check for **cgroup memory limits**:
 
 ```bash
 python scripts/check_system_limits.py
 ```
 
-Even if your system has 251GB RAM, the container might be limited to ~38GB by cgroups. The loader now automatically detects and respects this limit.
+Even if your host system has 251GB RAM, the container might be limited to ~38GB by cgroups.
 
-If you encounter `std::bad_alloc` errors when loading the model, this means the system ran out of RAM. The loader now includes automatic memory limits, but if you still have issues:
+### Solutions (In Order of Preference)
 
-### Solution 1: Disable CPU Memory Limit (if you have enough RAM)
+#### Solution 1: Use 8-bit Quantization (RECOMMENDED for 32-48GB RAM containers)
 
-If your system has 16GB+ RAM, you can disable the CPU memory limit:
+8-bit quantization is more reliable than 4-bit for memory-constrained environments:
 
 ```bash
-export DISABLE_CPU_MEMORY_LIMIT=true
+export USE_ALTERNATIVE_LOADER=true
+export USE_8BIT_QUANTIZATION=true
 python scripts/01_run_sparsity_gap.py
 ```
 
-### Solution 2: Use a Larger RunPod Instance
+**Trade-offs:**
+- ✅ More reliable loading
+- ✅ Works with 32-48GB RAM
+- ⚠️ Uses slightly more VRAM (~20GB vs ~16GB)
+- ⚠️ Slightly slower inference
 
-- **Minimum recommended:** 16GB RAM
-- **Recommended:** 32GB+ RAM for smoother operation
-- If you have 32GB+ RAM, use Solution 1 to disable the limit
+#### Solution 2: Upgrade to a Larger RunPod Instance
 
-### Solution 3: Pre-download Model
+For the best experience with 4-bit quantization:
+- **Minimum for 4-bit:** 48GB RAM
+- **Recommended:** 64GB+ RAM
+- After upgrading, the default loader should work without modifications
 
-Download the model first to avoid memory spikes during download:
+#### Solution 3: Disable Memory Limits (USE WITH CAUTION)
 
-```python
-from transformers import AutoModelForCausalLM
-AutoModelForCausalLM.from_pretrained(
-    "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
-    cache_dir="./models"
-)
-```
-
-### Solution 4: Check Available RAM
-
-Check how much RAM you have:
+If you have 48GB+ RAM and still get errors, the automatic limits may be too aggressive:
 
 ```bash
-free -h
+export DISABLE_ALL_MEMORY_LIMITS=true
+python scripts/01_run_sparsity_gap.py
 ```
 
-If you have less than 8GB free, the model loading will likely fail. Consider:
-- Using a larger RunPod instance
-- Closing other applications
-- Using the CPU memory limit (default behavior)
+**⚠️ WARNING:** This may cause system instability if you actually don't have enough RAM.
+
+#### Solution 4: Load Without Quantization (Requires High VRAM)
+
+If you have a GPU with 32GB+ VRAM (e.g., A100):
+
+```bash
+export USE_ALTERNATIVE_LOADER=true
+python scripts/01_run_sparsity_gap.py
+```
+
+This loads the model in FP16 without quantization.
+
+### Updated Memory Requirements Table
+
+| Configuration | GPU VRAM | CPU RAM | RunPod Instance |
+|--------------|----------|---------|-----------------|
+| 4-bit quantization | ~16GB | 48GB+ | RTX 4090 (48GB RAM) |
+| 8-bit quantization | ~20GB | 32GB+ | RTX 4090 (32GB RAM) |
+| No quantization (FP16) | ~32GB | 16GB+ | A100 (40GB VRAM) |
+
+### Technical Details
+
+The loader now automatically detects cgroup limits and adjusts memory allocation:
+- For containers with <48GB RAM: Uses only 25% of RAM for CPU (forces more disk offloading)
+- For containers with 48GB+ RAM: Uses 80% of RAM for CPU (standard behavior)
+- GPU memory is limited to 85% of available VRAM
+
+If you're still having issues after trying these solutions, check:
+
+```bash
+free -h  # Check available RAM
+nvidia-smi  # Check GPU VRAM
+cat /sys/fs/cgroup/memory/memory.limit_in_bytes  # Check container limit
+```
 
 ## Import Errors
 
