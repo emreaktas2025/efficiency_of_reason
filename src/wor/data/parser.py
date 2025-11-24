@@ -39,31 +39,65 @@ def parse_reasoning_output(text: str) -> Dict[str, str]:
     # 2. XML tags: <think>...</think>
     # 3. XML tags: <think>...</think>
     
-    patterns = [
-        # Pattern 1: Special tokens (most common in actual DeepSeek-R1 output)
-        (r'\|redacted_begin_of_sentence\|(.*?)\|redacted_end_of_sentence\|', '|redacted_begin_of_sentence|', '|redacted_end_of_sentence|'),
-        # Pattern 2: XML-style tags
-        (r'<think>(.*?)</think>', '<think>', '</think>'),
-        (r'<think>(.*?)</think>', '<think>', '</think>'),
-        (r'<reasoning>(.*?)</reasoning>', '<reasoning>', '</reasoning>'),
-    ]
+    # Check for special token format first (|redacted_begin_of_sentence|)
+    if '|redacted_begin_of_sentence|' in text:
+        start_pos = text.find('|redacted_begin_of_sentence|')
+        start_pos += len('|redacted_begin_of_sentence|')
+        
+        # Look for end token
+        if '|redacted_end_of_sentence|' in text:
+            end_pos = text.find('|redacted_end_of_sentence|')
+            result["thinking_segment"] = text[start_pos:end_pos].strip()
+            result["has_reasoning"] = True
+            # Response is everything after end token
+            result["response_segment"] = text[end_pos + len('|redacted_end_of_sentence|'):].strip()
+        else:
+            # No explicit end token - use heuristic: reasoning likely ends before final answer
+            # Look for common patterns that indicate the start of the final answer
+            # Common patterns: "The answer is", "Therefore", "So", or a number at the start of a line
+            remaining_text = text[start_pos:]
+            
+            # Try to find where reasoning ends (heuristic: look for answer patterns)
+            answer_patterns = [
+                r'\n\s*(?:The answer is|Therefore|So|Answer:|Final answer:)',
+                r'\n\s*\d+',  # Number at start of line
+                r'<\|im_end\|>',  # End of reasoning marker
+            ]
+            
+            end_pos_rel = len(remaining_text)  # Default: use all remaining text
+            for pattern in answer_patterns:
+                match = re.search(pattern, remaining_text, re.IGNORECASE)
+                if match:
+                    end_pos_rel = match.start()
+                    break
+            
+            result["thinking_segment"] = remaining_text[:end_pos_rel].strip()
+            result["has_reasoning"] = True
+            result["response_segment"] = remaining_text[end_pos_rel:].strip()
     
-    match = None
-    used_pattern = None
-    
-    for pattern, start_tag, end_tag in patterns:
+    # Try XML-style tags if special tokens not found
+    elif '<think>' in text and '</think>' in text:
+        pattern = r'<think>(.*?)</think>'
         match = re.search(pattern, text, re.DOTALL)
         if match:
-            used_pattern = (start_tag, end_tag)
-            break
-    
-    if match:
-        result["thinking_segment"] = match.group(1).strip()
-        result["has_reasoning"] = True
-        
-        # Extract response segment (everything after the closing tag)
-        end_pos = match.end()
-        result["response_segment"] = text[end_pos:].strip()
+            result["thinking_segment"] = match.group(1).strip()
+            result["has_reasoning"] = True
+            end_pos = match.end()
+            result["response_segment"] = text[end_pos:].strip()
+        else:
+            result["response_segment"] = text.strip()
+            result["has_reasoning"] = False
+    elif '<think>' in text and '</think>' in text:
+        pattern = r'<think>(.*?)</think>'
+        match = re.search(pattern, text, re.DOTALL)
+        if match:
+            result["thinking_segment"] = match.group(1).strip()
+            result["has_reasoning"] = True
+            end_pos = match.end()
+            result["response_segment"] = text[end_pos:].strip()
+        else:
+            result["response_segment"] = text.strip()
+            result["has_reasoning"] = False
     else:
         # No reasoning tags found - treat entire text as response
         result["response_segment"] = text.strip()
