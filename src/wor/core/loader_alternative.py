@@ -54,16 +54,18 @@ def load_deepseek_r1_model_alternative(
         gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         max_memory[0] = f"{int(gpu_memory_gb * 0.85)}GiB"
     
-    # Set CPU limit based on cgroup
+    # Set CPU limit based on cgroup - VERY aggressive for constrained containers
     if cgroup_limit_gb:
         if cgroup_limit_gb < 48:
-            cpu_limit_gb = max(4, int(cgroup_limit_gb * 0.2))  # Very aggressive: 20%
-            print(f"⚠ Container memory constrained - using {cpu_limit_gb}GB for CPU")
+            # Even more aggressive: use only 3-4GB for CPU to force maximum offloading
+            cpu_limit_gb = max(3, int(cgroup_limit_gb * 0.1))  # Only 10% for CPU!
+            print(f"⚠ Container memory constrained - using {cpu_limit_gb}GB for CPU (10% of limit)")
+            print(f"  This forces maximum disk offloading to avoid OOM")
         else:
             cpu_limit_gb = int(cgroup_limit_gb * 0.5)
         max_memory["cpu"] = f"{cpu_limit_gb}GiB"
     else:
-        max_memory["cpu"] = "8GiB"
+        max_memory["cpu"] = "4GiB"  # Conservative default
     
     print(f"Max memory settings: {max_memory}")
     
@@ -92,26 +94,60 @@ def load_deepseek_r1_model_alternative(
                 load_in_8bit=True,
             )
             
-            model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                quantization_config=quantization_config,
-                device_map="auto",
-                max_memory=max_memory,
-                offload_folder=offload_folder,
-                trust_remote_code=True,
-                low_cpu_mem_usage=True,
-            )
+            # First try with max_memory
+            try:
+                model = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    quantization_config=quantization_config,
+                    device_map="auto",
+                    max_memory=max_memory,
+                    offload_folder=offload_folder,
+                    trust_remote_code=True,
+                    low_cpu_mem_usage=True,
+                    use_safetensors=True,
+                )
+            except RuntimeError as e:
+                if "bad_alloc" in str(e) or "memory" in str(e).lower():
+                    print("⚠ max_memory approach failed, trying without max_memory (rely on device_map='auto')...")
+                    # Fallback: let device_map handle it without explicit limits
+                    model = AutoModelForCausalLM.from_pretrained(
+                        model_name,
+                        quantization_config=quantization_config,
+                        device_map="auto",
+                        offload_folder=offload_folder,
+                        trust_remote_code=True,
+                        low_cpu_mem_usage=True,
+                        use_safetensors=True,
+                    )
+                else:
+                    raise
         else:
             print("Attempting to load without quantization (will use more memory)...")
-            model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                device_map="auto",
-                max_memory=max_memory,
-                offload_folder=offload_folder,
-                trust_remote_code=True,
-                low_cpu_mem_usage=True,
-                torch_dtype=torch.float16,
-            )
+            try:
+                model = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    device_map="auto",
+                    max_memory=max_memory,
+                    offload_folder=offload_folder,
+                    trust_remote_code=True,
+                    low_cpu_mem_usage=True,
+                    dtype=torch.float16,
+                    use_safetensors=True,
+                )
+            except RuntimeError as e:
+                if "bad_alloc" in str(e) or "memory" in str(e).lower():
+                    print("⚠ max_memory approach failed, trying without max_memory...")
+                    model = AutoModelForCausalLM.from_pretrained(
+                        model_name,
+                        device_map="auto",
+                        offload_folder=offload_folder,
+                        trust_remote_code=True,
+                        low_cpu_mem_usage=True,
+                        dtype=torch.float16,
+                        use_safetensors=True,
+                    )
+                else:
+                    raise
         
         print("Model loaded successfully!")
         
