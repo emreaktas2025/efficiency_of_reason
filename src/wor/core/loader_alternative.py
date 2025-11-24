@@ -100,24 +100,49 @@ def load_deepseek_r1_model_alternative(
         # bitsandbytes needs too much CPU RAM during init
         # 1.5B model in FP16 only needs ~3GB GPU VRAM, which should fit
         if use_direct_gpu_load:
-            print("Loading model directly to GPU (no CPU memory limits)...")
+            print("Loading model with 4-bit quantization (no CPU memory limits)...")
+            print("  8B model needs quantization to fit - using 4-bit NF4")
+            print("  NO CPU memory limits - bitsandbytes needs RAM during init")
             try:
-                # Load directly to GPU with NO max_memory constraints
-                # The loading process needs temporary CPU RAM (~6GB) to process weights
-                # Setting max_memory causes std::bad_alloc even for small models
+                from transformers import BitsAndBytesConfig
+                
+                # Use 4-bit quantization but NO max_memory constraints
+                # bitsandbytes needs CPU RAM during initialization - don't limit it
+                quantization_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.float16,
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_quant_type="nf4",
+                )
+                
                 model = AutoModelForCausalLM.from_pretrained(
                     model_name,
-                    device_map="cuda:0",  # Force immediate GPU load
+                    quantization_config=quantization_config,
+                    device_map="auto",  # Let it handle device placement
                     trust_remote_code=True,
                     low_cpu_mem_usage=True,
-                    torch_dtype=torch.float16,
                     use_safetensors=True,
+                    # NO max_memory - let bitsandbytes use what it needs
                 )
-                print("✓ Model loaded successfully (FP16 on GPU)")
+                print("✓ Model loaded successfully (4-bit quantized)")
             except RuntimeError as e:
-                if "out of memory" in str(e).lower() or "cuda" in str(e).lower():
-                    print("⚠ GPU OOM - trying with device_map='auto' and offloading...")
-                    # Fallback: use auto device_map with offloading
+                error_str = str(e).lower()
+                if "bad_alloc" in error_str or "memory" in error_str:
+                    print("⚠ Memory error during quantization init")
+                    print("  Trying 8-bit quantization as fallback...")
+                    # Fallback to 8-bit
+                    quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+                    model = AutoModelForCausalLM.from_pretrained(
+                        model_name,
+                        quantization_config=quantization_config,
+                        device_map="auto",
+                        trust_remote_code=True,
+                        low_cpu_mem_usage=True,
+                        use_safetensors=True,
+                    )
+                elif "out of memory" in error_str or "cuda" in error_str:
+                    print("⚠ GPU OOM - trying FP16 with device_map='auto'...")
+                    # Last resort: FP16 with offloading
                     import tempfile
                     offload_folder = tempfile.mkdtemp(prefix="model_offload_")
                     model = AutoModelForCausalLM.from_pretrained(
@@ -126,7 +151,7 @@ def load_deepseek_r1_model_alternative(
                         offload_folder=offload_folder,
                         trust_remote_code=True,
                         low_cpu_mem_usage=True,
-                        torch_dtype=torch.float16,
+                        dtype=torch.float16,
                         use_safetensors=True,
                     )
                 else:
