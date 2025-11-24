@@ -43,12 +43,13 @@ def load_deepseek_r1_model(
     torch.cuda.empty_cache() if torch.cuda.is_available() else None
     
     # Set default max_memory if not provided
-    # Allow disabling CPU limit via environment variable for systems with more RAM
+    # Allow disabling ALL memory limits via environment variable for systems with lots of RAM
     disable_cpu_limit = os.getenv("DISABLE_CPU_MEMORY_LIMIT", "false").lower() == "true"
+    disable_all_limits = os.getenv("DISABLE_ALL_MEMORY_LIMITS", "false").lower() == "true"
     
-    if max_memory is None:
+    if max_memory is None and not disable_all_limits:
         max_memory = {}
-        if torch.cuda.is_available():
+        if torch.cuda.is_available() and not disable_all_limits:
             # Limit GPU memory (leave some headroom)
             gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
             max_memory[0] = f"{int(gpu_memory_gb * 0.85)}GiB"  # More conservative
@@ -60,6 +61,10 @@ def load_deepseek_r1_model(
             print("CPU memory limited to 4GB (set DISABLE_CPU_MEMORY_LIMIT=true to disable)")
         else:
             print("CPU memory limit disabled (DISABLE_CPU_MEMORY_LIMIT=true)")
+    
+    if disable_all_limits:
+        max_memory = None
+        print("All memory limits disabled (DISABLE_ALL_MEMORY_LIMITS=true)")
     
     print("Configuring 4-bit quantization (NF4)...")
     
@@ -105,7 +110,7 @@ def load_deepseek_r1_model(
             "device_map": device_map,
             "low_cpu_mem_usage": True,
             "trust_remote_code": True,
-            "torch_dtype": torch.float16,
+            "dtype": torch.float16,  # Use dtype instead of torch_dtype (fixes deprecation warning)
             "use_cache": False,
         }
         
@@ -116,6 +121,7 @@ def load_deepseek_r1_model(
             load_kwargs["offload_folder"] = offload_folder
         
         print("Attempting to load model...")
+        print(f"Load kwargs: {list(load_kwargs.keys())}")
         model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
         
         # Clear cache after loading
