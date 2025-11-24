@@ -52,36 +52,36 @@ def load_deepseek_r1_model_alternative(
     if cgroup_limit_gb:
         print(f"⚠ Detected cgroup memory limit: {cgroup_limit_gb:.2f} GB")
     
-    # For constrained containers, we'll try loading directly to GPU without any CPU RAM usage
-    # Skip all memory constraints and offloading for direct GPU load
+    # For constrained containers, load directly to GPU WITHOUT any CPU memory limits
+    # The model loading process needs temporary CPU RAM to process weights before GPU transfer
+    # Setting max_memory limits causes std::bad_alloc even for small models
     use_direct_gpu_load = cgroup_limit_gb and cgroup_limit_gb < 48
     
-    if not use_direct_gpu_load:
-        # Build max_memory constraints only if not doing direct GPU load
+    if use_direct_gpu_load:
+        # NO memory constraints - let the system use what it needs during loading
+        max_memory = None
+        offload_folder = None
+        print("⚠ Low memory container - loading directly to GPU")
+        print("  NO CPU memory limits (model needs ~6GB temp RAM during load)")
+        print("  Loading straight to GPU (FP16) - will use ~3GB VRAM")
+    else:
+        # Build max_memory constraints only for systems with more RAM
         max_memory = {}
         if torch.cuda.is_available():
             gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
             max_memory[0] = f"{int(gpu_memory_gb * 0.85)}GiB"
         
-        # Set CPU limit based on cgroup
         if cgroup_limit_gb:
-            if cgroup_limit_gb < 48:
-                cpu_limit_gb = max(3, int(cgroup_limit_gb * 0.1))
-                print(f"⚠ Container memory constrained - using {cpu_limit_gb}GB for CPU (10% of limit)")
-            else:
-                cpu_limit_gb = int(cgroup_limit_gb * 0.5)
+            cpu_limit_gb = int(cgroup_limit_gb * 0.5)
             max_memory["cpu"] = f"{cpu_limit_gb}GiB"
         else:
-            max_memory["cpu"] = "4GiB"
+            max_memory["cpu"] = "8GiB"
         
         print(f"Max memory settings: {max_memory}")
         
         # Create offload folder
         offload_folder = tempfile.mkdtemp(prefix="model_offload_")
         print(f"Using offload folder: {offload_folder}")
-    else:
-        max_memory = None
-        offload_folder = None
     
     # Load tokenizer
     print("Loading tokenizer...")
@@ -99,12 +99,11 @@ def load_deepseek_r1_model_alternative(
         # bitsandbytes needs too much CPU RAM during init
         # 1.5B model in FP16 only needs ~3GB GPU VRAM, which should fit
         if use_direct_gpu_load:
-            print("⚠ Low memory container - loading directly to GPU (FP16)...")
-            print("  Skipping CPU RAM usage - loading straight to GPU")
-            print("  1.5B model needs ~3GB VRAM")
+            print("Loading model directly to GPU (no CPU memory limits)...")
             try:
-                # Use device_map="cuda:0" to force immediate GPU loading
-                # max_shard_size loads in smaller chunks to reduce peak CPU RAM
+                # Load directly to GPU with NO max_memory constraints
+                # The loading process needs temporary CPU RAM (~6GB) to process weights
+                # Setting max_memory causes std::bad_alloc even for small models
                 model = AutoModelForCausalLM.from_pretrained(
                     model_name,
                     device_map="cuda:0",  # Force immediate GPU load
@@ -112,9 +111,8 @@ def load_deepseek_r1_model_alternative(
                     low_cpu_mem_usage=True,
                     torch_dtype=torch.float16,
                     use_safetensors=True,
-                    max_shard_size="500MB",  # Load in 500MB chunks to reduce peak RAM
                 )
-                print("✓ Loaded without quantization (FP16 on GPU)")
+                print("✓ Model loaded successfully (FP16 on GPU)")
             except RuntimeError as e:
                 if "out of memory" in str(e).lower() or "cuda" in str(e).lower():
                     print("⚠ GPU OOM - trying with device_map='auto' and offloading...")
