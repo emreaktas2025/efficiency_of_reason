@@ -104,7 +104,7 @@ def load_deepseek_r1_model_alternative(
             print("  1.5B model needs ~3GB VRAM")
             try:
                 # Use device_map="cuda:0" to force immediate GPU loading
-                # This minimizes CPU RAM usage during load
+                # max_shard_size loads in smaller chunks to reduce peak CPU RAM
                 model = AutoModelForCausalLM.from_pretrained(
                     model_name,
                     device_map="cuda:0",  # Force immediate GPU load
@@ -112,6 +112,7 @@ def load_deepseek_r1_model_alternative(
                     low_cpu_mem_usage=True,
                     torch_dtype=torch.float16,
                     use_safetensors=True,
+                    max_shard_size="500MB",  # Load in 500MB chunks to reduce peak RAM
                 )
                 print("✓ Loaded without quantization (FP16 on GPU)")
             except RuntimeError as e:
