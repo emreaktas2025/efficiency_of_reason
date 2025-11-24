@@ -87,6 +87,11 @@ def load_deepseek_r1_model_alternative(
         # Build max_memory constraints only for systems with more RAM
         max_memory, offload_folder = build_safe_limits(cgroup_limit_gb)
 
+    # Check if user wants to skip quantization entirely (useful for avoiding bitsandbytes crashes)
+    skip_quantization = os.getenv("SKIP_QUANTIZATION", "false").lower() == "true"
+    if skip_quantization:
+        print("⚠ SKIP_QUANTIZATION=true -> will load without quantization (requires more VRAM)")
+    
     # Small models (1.5B) can load safely in FP16 without quantization; allow uncapped
     # CPU RAM during load to avoid bitsandbytes spikes.
     small_model_unconstrained = is_small_model
@@ -115,24 +120,62 @@ def load_deepseek_r1_model_alternative(
         # 1.5B model in FP16 only needs ~3GB GPU VRAM, which should fit
         if use_direct_gpu_load:
             if is_small_model:
-                # For constrained containers, use 8-bit quantization from the start
-                # FP16 loading requires too much CPU RAM even with chunking
-                # 8-bit quantization reduces the model size during loading phase
-                print("Loading 1.5B model with 8-bit quantization (reduces CPU RAM during load)...")
-                from transformers import BitsAndBytesConfig
-                quantization_config = BitsAndBytesConfig(load_in_8bit=True)
-                model = AutoModelForCausalLM.from_pretrained(
-                    model_name,
-                    quantization_config=quantization_config,
-                    device_map="auto",
-                    trust_remote_code=True,
-                    low_cpu_mem_usage=True,
-                    use_safetensors=True,
-                    max_memory=None,  # No CPU limits for small model
-                    offload_folder=None,  # No offloading needed
-                    max_shard_size="200MB",  # Small chunks
-                )
-                print("✓ Model loaded successfully (8-bit quantized)")
+                # For constrained containers, try FP16 first (bitsandbytes init can cause bad_alloc)
+                # Small models fit in GPU VRAM, so we can avoid quantization entirely
+                if skip_quantization:
+                    print("Loading 1.5B model in FP16 (SKIP_QUANTIZATION=true)...")
+                else:
+                    print("Loading 1.5B model - trying FP16 first (avoids bitsandbytes memory spike)...")
+                try:
+                    # Try FP16 with very small shard size to minimize CPU RAM during load
+                    model = AutoModelForCausalLM.from_pretrained(
+                        model_name,
+                        device_map="auto",
+                        trust_remote_code=True,
+                        low_cpu_mem_usage=True,
+                        torch_dtype=torch.float16,
+                        use_safetensors=True,
+                        max_shard_size="100MB",  # Very small chunks to minimize CPU RAM
+                    )
+                    print("✓ Model loaded successfully (FP16, no quantization)")
+                except (RuntimeError, Exception) as e:
+                    error_str = str(e).lower()
+                    if skip_quantization:
+                        # If user explicitly requested no quantization, don't try quantization
+                        print(f"✗ FP16 loading failed: {e}")
+                        raise
+                    elif "bad_alloc" in error_str or "memory" in error_str or "cuda" in error_str:
+                        print("⚠ FP16 loading failed, trying 8-bit quantization as fallback...")
+                        print("  Note: bitsandbytes initialization may still fail in very constrained containers")
+                        print("  If this fails, try: export SKIP_QUANTIZATION=true")
+                        try:
+                            from transformers import BitsAndBytesConfig
+                            quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+                            model = AutoModelForCausalLM.from_pretrained(
+                                model_name,
+                                quantization_config=quantization_config,
+                                device_map="auto",
+                                trust_remote_code=True,
+                                low_cpu_mem_usage=True,
+                                use_safetensors=True,
+                                max_shard_size="100MB",  # Small chunks
+                            )
+                            print("✓ Model loaded successfully (8-bit quantized)")
+                        except Exception as e2:
+                            print(f"✗ 8-bit quantization also failed: {e2}")
+                            print("\n" + "="*80)
+                            print("MEMORY ERROR - Unable to load model")
+                            print("="*80)
+                            print(f"\nContainer limit: {cgroup_limit_gb:.1f}GB")
+                            print("Even 1.5B model requires more memory than available.")
+                            print("\nSOLUTIONS:")
+                            print("1. Upgrade to a container with 48GB+ RAM")
+                            print("2. Try setting: export SKIP_CGROUP_LIMIT_CHECK=true")
+                            print("3. Use a different model or reduce batch size")
+                            print("="*80 + "\n")
+                            raise RuntimeError(f"Failed to load model: {e2}") from e2
+                    else:
+                        raise
             else:
                 # 8B model - needs quantization
                 print("Loading 8B model with 4-bit quantization (constrained limits)...")
@@ -194,14 +237,17 @@ def load_deepseek_r1_model_alternative(
         elif use_8bit and not use_direct_gpu_load:
             # For systems with more RAM, use quantization if requested
             if is_small_model:
-                print("Small model + USE_8BIT_QUANTIZATION -> prefer FP16 streaming to avoid bitsandbytes spike")
+                if skip_quantization:
+                    print("Small model + SKIP_QUANTIZATION=true -> loading FP16 without quantization")
+                else:
+                    print("Small model + USE_8BIT_QUANTIZATION -> prefer FP16 streaming to avoid bitsandbytes spike")
                 try:
                     model = AutoModelForCausalLM.from_pretrained(
                         model_name,
                         device_map="auto",
                         trust_remote_code=True,
                         low_cpu_mem_usage=True,
-                        dtype=torch.float16,
+                        torch_dtype=torch.float16,
                         use_safetensors=True,
                         max_memory=max_memory_small,
                         offload_folder=offload_folder_small,
@@ -209,6 +255,9 @@ def load_deepseek_r1_model_alternative(
                     )
                     print("✓ Loaded small model in FP16 (no quantization)")
                 except RuntimeError as e:
+                    if skip_quantization:
+                        print(f"✗ FP16 loading failed: {e}")
+                        raise
                     print("⚠ FP16 streaming failed, falling back to 8-bit quantization...")
                     from transformers import BitsAndBytesConfig
                     
@@ -244,36 +293,76 @@ def load_deepseek_r1_model_alternative(
         else:
             # Final fallback: load without quantization
             if is_small_model:
-                print("Loading small model without quantization (FP16, no memory limits)...")
-                print("  Using max_shard_size to reduce peak CPU RAM")
-                try:
-                    model = AutoModelForCausalLM.from_pretrained(
-                        model_name,
-                        device_map="auto",
-                        trust_remote_code=True,
-                        low_cpu_mem_usage=True,
-                        dtype=torch.float16,
-                        use_safetensors=True,
-                        max_memory=max_memory_small,  # None for small models
-                        offload_folder=offload_folder_small,  # None for small models
-                        max_shard_size="500MB",  # Load in chunks
-                    )
-                    print("✓ Model loaded successfully (FP16)")
-                except RuntimeError as e:
-                    error_str = str(e).lower()
-                    if "bad_alloc" in error_str or "memory" in error_str:
-                        print("⚠ Still hitting memory limit - trying 200MB chunks...")
+                if skip_quantization:
+                    print("Loading small model without quantization (SKIP_QUANTIZATION=true)...")
+                else:
+                    print("Loading small model without quantization (FP16, no memory limits)...")
+                print("  Using very small max_shard_size to minimize peak CPU RAM")
+                
+                # For constrained containers, use aggressive memory limits even for small models
+                # The issue is that std::bad_alloc happens during file loading, not quantization
+                use_aggressive_limits = cgroup_limit_gb is not None and cgroup_limit_gb < 48
+                if use_aggressive_limits:
+                    # Force CPU memory limit to prevent bad_alloc during loading
+                    aggressive_max_memory = {"cpu": "4GiB"}
+                    if torch.cuda.is_available():
+                        gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                        aggressive_max_memory[0] = f"{int(gpu_memory_gb * 0.9)}GiB"
+                    aggressive_offload = tempfile.mkdtemp(prefix="model_offload_aggressive_")
+                    print(f"  Using aggressive memory limits: {aggressive_max_memory}")
+                    print(f"  Offload folder: {aggressive_offload}")
+                else:
+                    aggressive_max_memory = max_memory_small
+                    aggressive_offload = offload_folder_small
+                
+                # Try progressively smaller shard sizes
+                shard_sizes = ["50MB", "25MB", "10MB"]
+                model = None
+                last_error = None
+                
+                for shard_size in shard_sizes:
+                    try:
+                        print(f"  Attempting load with {shard_size} shard size...")
                         model = AutoModelForCausalLM.from_pretrained(
                             model_name,
-                            device_map="auto",
+                            device_map="cuda:0" if torch.cuda.is_available() else "cpu",
                             trust_remote_code=True,
                             low_cpu_mem_usage=True,
-                            dtype=torch.float16,
+                            torch_dtype=torch.float16,
                             use_safetensors=True,
-                            max_shard_size="200MB",  # Even smaller chunks
+                            max_memory=aggressive_max_memory if use_aggressive_limits else None,
+                            offload_folder=aggressive_offload if use_aggressive_limits else None,
+                            max_shard_size=shard_size,
                         )
+                        print(f"✓ Model loaded successfully (FP16, {shard_size} shards)")
+                        break
+                    except (RuntimeError, Exception) as e:
+                        last_error = e
+                        error_str = str(e).lower()
+                        if "bad_alloc" in error_str or "memory" in error_str:
+                            print(f"  ⚠ Failed with {shard_size} shards, trying smaller...")
+                            gc.collect()
+                            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+                            continue
+                        else:
+                            raise
+                
+                if model is None:
+                    print("\n" + "="*80)
+                    print("MEMORY ERROR - Unable to load model even with smallest shard size")
+                    print("="*80)
+                    print(f"\nContainer limit: {cgroup_limit_gb:.1f}GB" if cgroup_limit_gb else "\nNo cgroup limit detected")
+                    print("Even with 10MB shard sizes, model loading is failing.")
+                    print("\nThis suggests the container has insufficient memory for model loading.")
+                    print("\nSOLUTIONS:")
+                    print("1. Upgrade to a container with 48GB+ RAM")
+                    print("2. Try a different model (smaller than 1.5B)")
+                    print("3. Check if other processes are using memory")
+                    print("="*80 + "\n")
+                    if last_error:
+                        raise RuntimeError(f"Failed to load model: {last_error}") from last_error
                     else:
-                        raise
+                        raise RuntimeError("Failed to load model: unknown error")
             else:
                 print("Attempting to load without quantization (will use more memory)...")
                 # For constrained containers, try without max_memory first

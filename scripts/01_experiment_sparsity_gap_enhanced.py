@@ -453,6 +453,10 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
+    # Validate num_problems
+    if args.num_problems <= 0:
+        parser.error("--num-problems must be a positive integer")
+    
     output_dir = Path(args.output_dir) if args.output_dir else None
     
     run_experiment_1_enhanced(
