@@ -1,16 +1,19 @@
 """Setup script for efficiency_of_reason package."""
 
-from setuptools import setup, find_packages
+from setuptools import setup
 
-# Explicitly find all packages including subpackages
-packages = find_packages(where="src", include=["wor", "wor.*"])
-
+# Explicitly list all packages to ensure they're all included
 setup(
     name="efficiency-of-reason",
     version="0.1.0",
     description="Quantifying the Computational Sparsity of Chain-of-Thought in Large Language Models",
     author="Emre Aktas",
-    packages=packages,
+    packages=[
+        "wor",
+        "wor.core",
+        "wor.data",
+        "wor.metrics",
+    ],
     package_dir={"": "src"},
     python_requires=">=3.8",
     install_requires=[
