@@ -52,26 +52,59 @@ def test_model_loading():
         return False
     print()
     
-    # Test 3: Try loading model with minimal options
-    print("Test 3: Loading model (minimal options, CPU only)...")
+    # Test 3: Try loading model with different strategies
+    print("Test 3: Loading model (trying different strategies)...")
     gc.collect()
-    try:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            device_map=None,  # CPU only
-            trust_remote_code=True,
-            low_cpu_mem_usage=True,
-        )
-        print("✓ Model loaded to CPU successfully!")
-        print(f"  Model size: {sum(p.numel() for p in model.parameters()) / 1e9:.2f}B parameters")
-        del model
+    
+    strategies = [
+        {
+            "name": "CPU, low_cpu_mem_usage, no safetensors",
+            "kwargs": {
+                "device_map": None,
+                "trust_remote_code": True,
+                "low_cpu_mem_usage": True,
+                "use_safetensors": False,  # Try without safetensors
+            }
+        },
+        {
+            "name": "CPU, low_cpu_mem_usage, with safetensors",
+            "kwargs": {
+                "device_map": None,
+                "trust_remote_code": True,
+                "low_cpu_mem_usage": True,
+                "use_safetensors": True,
+            }
+        },
+        {
+            "name": "CPU, no low_cpu_mem_usage",
+            "kwargs": {
+                "device_map": None,
+                "trust_remote_code": True,
+                "low_cpu_mem_usage": False,
+            }
+        },
+    ]
+    
+    for strategy in strategies:
+        print(f"\n  Trying: {strategy['name']}...")
         gc.collect()
-    except Exception as e:
-        print(f"✗ Failed to load model: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-    print()
+        try:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                **strategy['kwargs']
+            )
+            print(f"  ✓ Success! Model loaded with {strategy['name']}")
+            print(f"    Model size: {sum(p.numel() for p in model.parameters()) / 1e9:.2f}B parameters")
+            del model
+            gc.collect()
+            print("\n✓ Model can be loaded!")
+            return True
+        except Exception as e:
+            print(f"  ✗ Failed: {type(e).__name__}: {str(e)[:100]}")
+            gc.collect()
+    
+    print("\n✗ All loading strategies failed")
+    return False
     
     print("=" * 80)
     print("All tests passed! Model can be loaded.")
