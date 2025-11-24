@@ -133,35 +133,6 @@ def load_deepseek_r1_model_alternative(
                     max_shard_size="200MB",  # Small chunks
                 )
                 print("✓ Model loaded successfully (8-bit quantized)")
-                    elif "out of memory" in error_str or "cuda" in error_str:
-                        print("⚠ GPU OOM - trying with device_map='auto'...")
-                        model = AutoModelForCausalLM.from_pretrained(
-                            model_name,
-                            device_map="auto",
-                            trust_remote_code=True,
-                            low_cpu_mem_usage=True,
-                            dtype=torch.float16,
-                            use_safetensors=True,
-                            max_memory=max_memory_small,
-                            offload_folder=offload_folder_small,
-                            max_shard_size="500MB",
-                        )
-                    else:
-                        print("⚠ Direct FP16 load failed - falling back to 8-bit quantization...")
-                        from transformers import BitsAndBytesConfig
-                        
-                        quantization_config = BitsAndBytesConfig(load_in_8bit=True)
-                        model = AutoModelForCausalLM.from_pretrained(
-                            model_name,
-                            quantization_config=quantization_config,
-                            device_map="auto",
-                            trust_remote_code=True,
-                            low_cpu_mem_usage=True,
-                            use_safetensors=True,
-                            max_memory=max_memory_small,
-                            offload_folder=offload_folder_small,
-                            max_shard_size="200MB",
-                        )
             else:
                 # 8B model - needs quantization
                 print("Loading 8B model with 4-bit quantization (constrained limits)...")
