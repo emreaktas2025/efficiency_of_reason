@@ -87,15 +87,46 @@ def load_deepseek_r1_model_alternative(
     try:
         # Try different loading strategies
         if use_8bit:
-            print("Attempting 8-bit quantization with memory limits...")
+            print("Attempting 8-bit quantization...")
             from transformers import BitsAndBytesConfig
             
             quantization_config = BitsAndBytesConfig(
                 load_in_8bit=True,
             )
             
-            # First try with max_memory
-            try:
+            # For constrained containers, try WITHOUT max_memory first
+            # bitsandbytes needs RAM during init, and max_memory can cause bad_alloc
+            if cgroup_limit_gb and cgroup_limit_gb < 48:
+                print("⚠ Low memory container detected - trying without max_memory first...")
+                print("  This lets device_map='auto' handle offloading more flexibly")
+                try:
+                    model = AutoModelForCausalLM.from_pretrained(
+                        model_name,
+                        quantization_config=quantization_config,
+                        device_map="auto",
+                        offload_folder=offload_folder,
+                        trust_remote_code=True,
+                        low_cpu_mem_usage=True,
+                        use_safetensors=True,
+                    )
+                except RuntimeError as e:
+                    if "bad_alloc" in str(e) or "memory" in str(e).lower():
+                        print("⚠ Without max_memory also failed, trying with max_memory as fallback...")
+                        # Fallback: try with max_memory
+                        model = AutoModelForCausalLM.from_pretrained(
+                            model_name,
+                            quantization_config=quantization_config,
+                            device_map="auto",
+                            max_memory=max_memory,
+                            offload_folder=offload_folder,
+                            trust_remote_code=True,
+                            low_cpu_mem_usage=True,
+                            use_safetensors=True,
+                        )
+                    else:
+                        raise
+            else:
+                # For systems with more RAM, use max_memory
                 model = AutoModelForCausalLM.from_pretrained(
                     model_name,
                     quantization_config=quantization_config,
@@ -106,24 +137,37 @@ def load_deepseek_r1_model_alternative(
                     low_cpu_mem_usage=True,
                     use_safetensors=True,
                 )
-            except RuntimeError as e:
-                if "bad_alloc" in str(e) or "memory" in str(e).lower():
-                    print("⚠ max_memory approach failed, trying without max_memory (rely on device_map='auto')...")
-                    # Fallback: let device_map handle it without explicit limits
+        else:
+            print("Attempting to load without quantization (will use more memory)...")
+            # For constrained containers, try without max_memory first
+            if cgroup_limit_gb and cgroup_limit_gb < 48:
+                print("⚠ Low memory container - trying without max_memory first...")
+                try:
                     model = AutoModelForCausalLM.from_pretrained(
                         model_name,
-                        quantization_config=quantization_config,
                         device_map="auto",
                         offload_folder=offload_folder,
                         trust_remote_code=True,
                         low_cpu_mem_usage=True,
+                        dtype=torch.float16,
                         use_safetensors=True,
                     )
-                else:
-                    raise
-        else:
-            print("Attempting to load without quantization (will use more memory)...")
-            try:
+                except RuntimeError as e:
+                    if "bad_alloc" in str(e) or "memory" in str(e).lower():
+                        print("⚠ Trying with max_memory as fallback...")
+                        model = AutoModelForCausalLM.from_pretrained(
+                            model_name,
+                            device_map="auto",
+                            max_memory=max_memory,
+                            offload_folder=offload_folder,
+                            trust_remote_code=True,
+                            low_cpu_mem_usage=True,
+                            dtype=torch.float16,
+                            use_safetensors=True,
+                        )
+                    else:
+                        raise
+            else:
                 model = AutoModelForCausalLM.from_pretrained(
                     model_name,
                     device_map="auto",
@@ -134,20 +178,6 @@ def load_deepseek_r1_model_alternative(
                     dtype=torch.float16,
                     use_safetensors=True,
                 )
-            except RuntimeError as e:
-                if "bad_alloc" in str(e) or "memory" in str(e).lower():
-                    print("⚠ max_memory approach failed, trying without max_memory...")
-                    model = AutoModelForCausalLM.from_pretrained(
-                        model_name,
-                        device_map="auto",
-                        offload_folder=offload_folder,
-                        trust_remote_code=True,
-                        low_cpu_mem_usage=True,
-                        dtype=torch.float16,
-                        use_safetensors=True,
-                    )
-                else:
-                    raise
         
         print("Model loaded successfully!")
         
