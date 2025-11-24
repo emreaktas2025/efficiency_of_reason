@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "efficiency-of-reason"
+version = "0.1.0"
+description = "Quantifying the Computational Sparsity of Chain-of-Thought in Large Language Models"
+requires-python = ">=3.8"
+dependencies = [
+    "torch>=2.0.0",
+    "transformers>=4.35.0",
+    "bitsandbytes>=0.41.0",
+    "accelerate>=0.24.0",
+    "tabulate>=0.9.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
