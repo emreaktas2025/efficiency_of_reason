@@ -62,6 +62,7 @@ def load_deepseek_r1_model_alternative(
 
     def build_safe_limits(limit_gb):
         """Construct conservative max_memory/offload settings to avoid spikes."""
+        import tempfile  # Import inside function to ensure it's available
         limits = {}
         if torch.cuda.is_available():
             gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
