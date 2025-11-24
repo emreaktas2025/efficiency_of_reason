@@ -92,36 +92,38 @@ def load_deepseek_r1_model(
     print("Loading model with 4-bit quantization...")
     print(f"Max memory settings: {max_memory}")
     
-    # Create temporary directory for offloading if needed
-    import tempfile
-    offload_folder = tempfile.mkdtemp(prefix="model_offload_")
-    print(f"Using offload folder: {offload_folder}")
-    
     # Set environment variables for more aggressive memory management
     # Set before any CUDA operations
     if "PYTORCH_CUDA_ALLOC_CONF" not in os.environ:
         os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
     
+    # Only create offload folder if we're using max_memory constraints
+    offload_folder = None
+    if max_memory:
+        import tempfile
+        offload_folder = tempfile.mkdtemp(prefix="model_offload_")
+        print(f"Using offload folder: {offload_folder}")
+    
     try:
-        # Try loading with minimal constraints first (since user has 251GB RAM)
-        # If that fails, we'll try with constraints
+        # Build load kwargs - keep it simple
         load_kwargs = {
             "quantization_config": quantization_config,
             "device_map": device_map,
             "low_cpu_mem_usage": True,
             "trust_remote_code": True,
-            "dtype": torch.float16,  # Use dtype instead of torch_dtype (fixes deprecation warning)
-            "use_cache": False,
+            "dtype": torch.float16,
         }
         
-        # Only add max_memory and offload_folder if max_memory is specified
-        # For systems with lots of RAM, these constraints might cause issues
+        # Only add constraints if max_memory is specified
         if max_memory:
             load_kwargs["max_memory"] = max_memory
-            load_kwargs["offload_folder"] = offload_folder
+            if offload_folder:
+                load_kwargs["offload_folder"] = offload_folder
         
         print("Attempting to load model...")
         print(f"Load kwargs: {list(load_kwargs.keys())}")
+        
+        # Try loading - this might fail with bitsandbytes bug, but we'll catch it
         model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
         
         # Clear cache after loading
@@ -129,11 +131,12 @@ def load_deepseek_r1_model(
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
         
         # Clean up offload folder (model is now loaded)
-        try:
-            import shutil
-            shutil.rmtree(offload_folder, ignore_errors=True)
-        except:
-            pass
+        if offload_folder:
+            try:
+                import shutil
+                shutil.rmtree(offload_folder, ignore_errors=True)
+            except:
+                pass
         
         print("Model loaded successfully!")
         return model, tokenizer
@@ -143,11 +146,12 @@ def load_deepseek_r1_model(
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
         
         # Clean up offload folder on error
-        try:
-            import shutil
-            shutil.rmtree(offload_folder, ignore_errors=True)
-        except:
-            pass
+        if offload_folder:
+            try:
+                import shutil
+                shutil.rmtree(offload_folder, ignore_errors=True)
+            except:
+                pass
         
         raise RuntimeError(f"Failed to load model: {e}") from e
 
