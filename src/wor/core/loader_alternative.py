@@ -89,21 +89,28 @@ def load_deepseek_r1_model_alternative(
         tokenizer.pad_token_id = tokenizer.eos_token_id
     
     try:
-        # Try different loading strategies
-        if use_8bit:
-            print("Attempting 8-bit quantization...")
-            from transformers import BitsAndBytesConfig
-            
-            quantization_config = BitsAndBytesConfig(
-                load_in_8bit=True,
-            )
-            
-            # For constrained containers, try WITHOUT max_memory first
-            # bitsandbytes needs RAM during init, and max_memory can cause bad_alloc
-            if cgroup_limit_gb and cgroup_limit_gb < 48:
-                print("⚠ Low memory container detected - trying without max_memory first...")
-                print("  This lets device_map='auto' handle offloading more flexibly")
-                try:
+        # For constrained containers, try loading WITHOUT quantization first
+        # bitsandbytes needs too much CPU RAM during init
+        # 1.5B model in FP16 only needs ~3GB GPU VRAM, which should fit
+        if cgroup_limit_gb and cgroup_limit_gb < 48:
+            print("⚠ Low memory container - trying WITHOUT quantization first...")
+            print("  Loading directly to GPU (FP16) - 1.5B model needs ~3GB VRAM")
+            try:
+                model = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    device_map="auto",
+                    trust_remote_code=True,
+                    low_cpu_mem_usage=True,
+                    dtype=torch.float16,
+                    use_safetensors=True,
+                )
+                print("✓ Loaded without quantization (FP16 on GPU)")
+            except RuntimeError as e:
+                if "out of memory" in str(e).lower() or "cuda" in str(e).lower():
+                    print("⚠ GPU OOM - trying with 8-bit quantization...")
+                    # Fallback to quantization if GPU doesn't have enough VRAM
+                    from transformers import BitsAndBytesConfig
+                    quantization_config = BitsAndBytesConfig(load_in_8bit=True)
                     model = AutoModelForCausalLM.from_pretrained(
                         model_name,
                         quantization_config=quantization_config,
@@ -113,34 +120,27 @@ def load_deepseek_r1_model_alternative(
                         low_cpu_mem_usage=True,
                         use_safetensors=True,
                     )
-                except RuntimeError as e:
-                    if "bad_alloc" in str(e) or "memory" in str(e).lower():
-                        print("⚠ Without max_memory also failed, trying with max_memory as fallback...")
-                        # Fallback: try with max_memory
-                        model = AutoModelForCausalLM.from_pretrained(
-                            model_name,
-                            quantization_config=quantization_config,
-                            device_map="auto",
-                            max_memory=max_memory,
-                            offload_folder=offload_folder,
-                            trust_remote_code=True,
-                            low_cpu_mem_usage=True,
-                            use_safetensors=True,
-                        )
-                    else:
-                        raise
-            else:
-                # For systems with more RAM, use max_memory
-                model = AutoModelForCausalLM.from_pretrained(
-                    model_name,
-                    quantization_config=quantization_config,
-                    device_map="auto",
-                    max_memory=max_memory,
-                    offload_folder=offload_folder,
-                    trust_remote_code=True,
-                    low_cpu_mem_usage=True,
-                    use_safetensors=True,
-                )
+                else:
+                    raise
+        elif use_8bit:
+            # For systems with more RAM, use quantization if requested
+            print("Attempting 8-bit quantization...")
+            from transformers import BitsAndBytesConfig
+            
+            quantization_config = BitsAndBytesConfig(
+                load_in_8bit=True,
+            )
+            
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                quantization_config=quantization_config,
+                device_map="auto",
+                max_memory=max_memory,
+                offload_folder=offload_folder,
+                trust_remote_code=True,
+                low_cpu_mem_usage=True,
+                use_safetensors=True,
+            )
         else:
             print("Attempting to load without quantization (will use more memory)...")
             # For constrained containers, try without max_memory first
