@@ -54,17 +54,24 @@ def load_deepseek_r1_model_alternative(
             quantization_config=quantization_config,
             device_map="auto",
             trust_remote_code=True,
-            torch_dtype=torch.float16,
+            dtype=torch.float16,
         )
     else:
         print("Attempting to load without quantization (will use more memory)...")
+        # Try loading without device_map first, then move to GPU manually
+        print("Loading model to CPU first...")
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            device_map="auto",
+            device_map=None,  # Load to CPU first
             trust_remote_code=True,
-            torch_dtype=torch.float16,
+            dtype=torch.float16,
             low_cpu_mem_usage=True,
         )
+        
+        # Move to GPU if available
+        if torch.cuda.is_available():
+            print("Moving model to GPU...")
+            model = model.to("cuda")
     
     print("Model loaded successfully!")
     return model, tokenizer
