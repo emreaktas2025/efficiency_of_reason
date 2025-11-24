@@ -122,6 +122,7 @@ def load_deepseek_r1_model_alternative(
                     trust_remote_code=True,
                     low_cpu_mem_usage=True,
                     use_safetensors=True,
+                    max_shard_size="2GB",  # Load in 2GB chunks to reduce peak CPU RAM
                     # NO max_memory - let bitsandbytes use what it needs
                 )
                 print("✓ Model loaded successfully (4-bit quantized)")
