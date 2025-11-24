@@ -42,15 +42,15 @@ def load_deepseek_r1_model(
     gc.collect()
     torch.cuda.empty_cache() if torch.cuda.is_available() else None
     
-    # Set default max_memory if not provided (limit CPU to 8GB to prevent bad_alloc)
+    # Set default max_memory if not provided (limit CPU to 4GB to prevent bad_alloc)
     if max_memory is None:
         max_memory = {}
         if torch.cuda.is_available():
             # Limit GPU memory (leave some headroom)
             gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-            max_memory[0] = f"{int(gpu_memory_gb * 0.9)}GiB"
-        # Limit CPU memory to prevent std::bad_alloc
-        max_memory["cpu"] = "8GiB"
+            max_memory[0] = f"{int(gpu_memory_gb * 0.85)}GiB"  # More conservative
+        # Limit CPU memory aggressively to prevent std::bad_alloc
+        max_memory["cpu"] = "4GiB"  # Reduced from 8GiB
     
     print("Configuring 4-bit quantization (NF4)...")
     
@@ -77,6 +77,12 @@ def load_deepseek_r1_model(
     # Load model with quantization
     print("Loading model with 4-bit quantization...")
     print(f"Max memory settings: {max_memory}")
+    
+    # Create temporary directory for offloading if needed
+    import tempfile
+    offload_folder = tempfile.mkdtemp(prefix="model_offload_")
+    print(f"Using offload folder: {offload_folder}")
+    
     try:
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
@@ -84,14 +90,23 @@ def load_deepseek_r1_model(
             device_map=device_map,
             low_cpu_mem_usage=low_cpu_mem_usage,
             max_memory=max_memory,
+            offload_folder=offload_folder,  # Offload to disk if needed
             trust_remote_code=True,
             dtype=torch.float16,  # Fixed: use dtype instead of torch_dtype
             use_cache=False,  # Disable KV cache during loading to save memory
+            use_safetensors=True,  # Use safetensors for more efficient loading
         )
         
         # Clear cache after loading
         gc.collect()
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
+        
+        # Clean up offload folder (model is now loaded)
+        try:
+            import shutil
+            shutil.rmtree(offload_folder, ignore_errors=True)
+        except:
+            pass
         
         print("Model loaded successfully!")
         return model, tokenizer
@@ -99,5 +114,13 @@ def load_deepseek_r1_model(
         # Clear cache on error
         gc.collect()
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
+        
+        # Clean up offload folder on error
+        try:
+            import shutil
+            shutil.rmtree(offload_folder, ignore_errors=True)
+        except:
+            pass
+        
         raise RuntimeError(f"Failed to load model: {e}") from e
 
