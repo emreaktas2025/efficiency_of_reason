@@ -52,30 +52,36 @@ def load_deepseek_r1_model_alternative(
     if cgroup_limit_gb:
         print(f"⚠ Detected cgroup memory limit: {cgroup_limit_gb:.2f} GB")
     
-    # Build max_memory constraints
-    max_memory = {}
-    if torch.cuda.is_available():
-        gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        max_memory[0] = f"{int(gpu_memory_gb * 0.85)}GiB"
+    # For constrained containers, we'll try loading directly to GPU without any CPU RAM usage
+    # Skip all memory constraints and offloading for direct GPU load
+    use_direct_gpu_load = cgroup_limit_gb and cgroup_limit_gb < 48
     
-    # Set CPU limit based on cgroup - VERY aggressive for constrained containers
-    if cgroup_limit_gb:
-        if cgroup_limit_gb < 48:
-            # Even more aggressive: use only 3-4GB for CPU to force maximum offloading
-            cpu_limit_gb = max(3, int(cgroup_limit_gb * 0.1))  # Only 10% for CPU!
-            print(f"⚠ Container memory constrained - using {cpu_limit_gb}GB for CPU (10% of limit)")
-            print(f"  This forces maximum disk offloading to avoid OOM")
+    if not use_direct_gpu_load:
+        # Build max_memory constraints only if not doing direct GPU load
+        max_memory = {}
+        if torch.cuda.is_available():
+            gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            max_memory[0] = f"{int(gpu_memory_gb * 0.85)}GiB"
+        
+        # Set CPU limit based on cgroup
+        if cgroup_limit_gb:
+            if cgroup_limit_gb < 48:
+                cpu_limit_gb = max(3, int(cgroup_limit_gb * 0.1))
+                print(f"⚠ Container memory constrained - using {cpu_limit_gb}GB for CPU (10% of limit)")
+            else:
+                cpu_limit_gb = int(cgroup_limit_gb * 0.5)
+            max_memory["cpu"] = f"{cpu_limit_gb}GiB"
         else:
-            cpu_limit_gb = int(cgroup_limit_gb * 0.5)
-        max_memory["cpu"] = f"{cpu_limit_gb}GiB"
+            max_memory["cpu"] = "4GiB"
+        
+        print(f"Max memory settings: {max_memory}")
+        
+        # Create offload folder
+        offload_folder = tempfile.mkdtemp(prefix="model_offload_")
+        print(f"Using offload folder: {offload_folder}")
     else:
-        max_memory["cpu"] = "4GiB"  # Conservative default
-    
-    print(f"Max memory settings: {max_memory}")
-    
-    # Create offload folder
-    offload_folder = tempfile.mkdtemp(prefix="model_offload_")
-    print(f"Using offload folder: {offload_folder}")
+        max_memory = None
+        offload_folder = None
     
     # Load tokenizer
     print("Loading tokenizer...")
@@ -92,37 +98,40 @@ def load_deepseek_r1_model_alternative(
         # For constrained containers, try loading WITHOUT quantization first
         # bitsandbytes needs too much CPU RAM during init
         # 1.5B model in FP16 only needs ~3GB GPU VRAM, which should fit
-        if cgroup_limit_gb and cgroup_limit_gb < 48:
-            print("⚠ Low memory container - trying WITHOUT quantization first...")
-            print("  Loading directly to GPU (FP16) - 1.5B model needs ~3GB VRAM")
+        if use_direct_gpu_load:
+            print("⚠ Low memory container - loading directly to GPU (FP16)...")
+            print("  Skipping CPU RAM usage - loading straight to GPU")
+            print("  1.5B model needs ~3GB VRAM")
             try:
+                # Use device_map="cuda:0" to force immediate GPU loading
+                # This minimizes CPU RAM usage during load
                 model = AutoModelForCausalLM.from_pretrained(
                     model_name,
-                    device_map="auto",
+                    device_map="cuda:0",  # Force immediate GPU load
                     trust_remote_code=True,
                     low_cpu_mem_usage=True,
-                    dtype=torch.float16,
+                    torch_dtype=torch.float16,
                     use_safetensors=True,
                 )
                 print("✓ Loaded without quantization (FP16 on GPU)")
             except RuntimeError as e:
                 if "out of memory" in str(e).lower() or "cuda" in str(e).lower():
-                    print("⚠ GPU OOM - trying with 8-bit quantization...")
-                    # Fallback to quantization if GPU doesn't have enough VRAM
-                    from transformers import BitsAndBytesConfig
-                    quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+                    print("⚠ GPU OOM - trying with device_map='auto' and offloading...")
+                    # Fallback: use auto device_map with offloading
+                    import tempfile
+                    offload_folder = tempfile.mkdtemp(prefix="model_offload_")
                     model = AutoModelForCausalLM.from_pretrained(
                         model_name,
-                        quantization_config=quantization_config,
                         device_map="auto",
                         offload_folder=offload_folder,
                         trust_remote_code=True,
                         low_cpu_mem_usage=True,
+                        torch_dtype=torch.float16,
                         use_safetensors=True,
                     )
                 else:
                     raise
-        elif use_8bit:
+        elif use_8bit and not use_direct_gpu_load:
             # For systems with more RAM, use quantization if requested
             print("Attempting 8-bit quantization...")
             from transformers import BitsAndBytesConfig
