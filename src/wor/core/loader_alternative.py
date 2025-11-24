@@ -59,6 +59,7 @@ def load_deepseek_r1_model_alternative(
     # Detect constrained containers (e.g., RunPod with 32-48GB RAM) and switch to a
     # more defensive loading path to avoid std::bad_alloc during weight streaming.
     use_direct_gpu_load = cgroup_limit_gb and cgroup_limit_gb < 48
+    is_small_model = "1.5b" in model_name.lower() or "qwen-1.5b" in model_name.lower()
 
     def build_safe_limits(limit_gb):
         """Construct conservative max_memory/offload settings to avoid spikes."""
@@ -85,6 +86,17 @@ def load_deepseek_r1_model_alternative(
     else:
         # Build max_memory constraints only for systems with more RAM
         max_memory, offload_folder = build_safe_limits(cgroup_limit_gb)
+
+    # Small models (1.5B) can load safely in FP16 without quantization; allow uncapped
+    # CPU RAM during load to avoid bitsandbytes spikes.
+    small_model_unconstrained = is_small_model
+    if small_model_unconstrained:
+        max_memory_small = None
+        offload_folder_small = None
+        print("Small model detected -> allowing uncapped CPU during load (max_memory=None)")
+    else:
+        max_memory_small = max_memory
+        offload_folder_small = offload_folder
     
     # Load tokenizer
     print("Loading tokenizer...")
@@ -102,9 +114,6 @@ def load_deepseek_r1_model_alternative(
         # bitsandbytes needs too much CPU RAM during init
         # 1.5B model in FP16 only needs ~3GB GPU VRAM, which should fit
         if use_direct_gpu_load:
-            # Check if it's a small model (1.5B) - load directly without quantization
-            is_small_model = "1.5B" in model_name or "qwen-1.5b" in model_name.lower()
-            
             if is_small_model:
                 print("Loading 1.5B model with constrained streaming (FP16, no quantization)...")
                 print("  Using max_shard_size to load in smaller chunks (reduces peak CPU RAM)")
@@ -117,8 +126,8 @@ def load_deepseek_r1_model_alternative(
                         low_cpu_mem_usage=True,
                         dtype=torch.float16,
                         use_safetensors=True,
-                        max_memory=max_memory,
-                        offload_folder=offload_folder,
+                        max_memory=max_memory_small,
+                        offload_folder=offload_folder_small,
                         max_shard_size="500MB",  # Load in 500MB chunks
                     )
                     print("✓ Model loaded successfully (FP16 with constrained streaming)")
@@ -133,8 +142,8 @@ def load_deepseek_r1_model_alternative(
                             low_cpu_mem_usage=True,
                             dtype=torch.float16,
                             use_safetensors=True,
-                            max_memory=max_memory,
-                            offload_folder=offload_folder,
+                            max_memory=max_memory_small,
+                            offload_folder=offload_folder_small,
                             max_shard_size="200MB",  # Even smaller chunks
                         )
                     elif "out of memory" in error_str or "cuda" in error_str:
@@ -146,8 +155,8 @@ def load_deepseek_r1_model_alternative(
                             low_cpu_mem_usage=True,
                             dtype=torch.float16,
                             use_safetensors=True,
-                            max_memory=max_memory,
-                            offload_folder=offload_folder,
+                            max_memory=max_memory_small,
+                            offload_folder=offload_folder_small,
                             max_shard_size="500MB",
                         )
                     else:
@@ -162,8 +171,8 @@ def load_deepseek_r1_model_alternative(
                             trust_remote_code=True,
                             low_cpu_mem_usage=True,
                             use_safetensors=True,
-                            max_memory=max_memory,
-                            offload_folder=offload_folder,
+                            max_memory=max_memory_small,
+                            offload_folder=offload_folder_small,
                             max_shard_size="200MB",
                         )
             else:
@@ -226,23 +235,54 @@ def load_deepseek_r1_model_alternative(
                         raise
         elif use_8bit and not use_direct_gpu_load:
             # For systems with more RAM, use quantization if requested
-            print("Attempting 8-bit quantization...")
-            from transformers import BitsAndBytesConfig
-            
-            quantization_config = BitsAndBytesConfig(
-                load_in_8bit=True,
-            )
-            
-            model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                quantization_config=quantization_config,
-                device_map="auto",
-                max_memory=max_memory,
-                offload_folder=offload_folder,
-                trust_remote_code=True,
-                low_cpu_mem_usage=True,
-                use_safetensors=True,
-            )
+            if is_small_model:
+                print("Small model + USE_8BIT_QUANTIZATION -> prefer FP16 streaming to avoid bitsandbytes spike")
+                try:
+                    model = AutoModelForCausalLM.from_pretrained(
+                        model_name,
+                        device_map="auto",
+                        trust_remote_code=True,
+                        low_cpu_mem_usage=True,
+                        dtype=torch.float16,
+                        use_safetensors=True,
+                        max_memory=max_memory_small,
+                        offload_folder=offload_folder_small,
+                        max_shard_size="500MB",
+                    )
+                    print("✓ Loaded small model in FP16 (no quantization)")
+                except RuntimeError as e:
+                    print("⚠ FP16 streaming failed, falling back to 8-bit quantization...")
+                    from transformers import BitsAndBytesConfig
+                    
+                    quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+                    model = AutoModelForCausalLM.from_pretrained(
+                        model_name,
+                        quantization_config=quantization_config,
+                        device_map="auto",
+                        max_memory=max_memory_small,
+                        offload_folder=offload_folder_small,
+                        trust_remote_code=True,
+                        low_cpu_mem_usage=True,
+                        use_safetensors=True,
+                    )
+            else:
+                print("Attempting 8-bit quantization...")
+                from transformers import BitsAndBytesConfig
+                
+                quantization_config = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                )
+                
+                model = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    quantization_config=quantization_config,
+                    device_map="auto",
+                    max_memory=max_memory,
+                    offload_folder=offload_folder,
+                    trust_remote_code=True,
+                    low_cpu_mem_usage=True,
+                    use_safetensors=True,
+                )
         else:
             print("Attempting to load without quantization (will use more memory)...")
             # For constrained containers, try without max_memory first
