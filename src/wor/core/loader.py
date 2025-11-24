@@ -16,7 +16,7 @@ import os
 
 
 def load_deepseek_r1_model(
-    model_name: str = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    model_name: str = None,
     device_map: str = "auto",
     low_cpu_mem_usage: bool = True,
     max_memory: dict = None,
@@ -25,7 +25,7 @@ def load_deepseek_r1_model(
     Load DeepSeek-R1 model with 4-bit quantization for memory efficiency.
     
     Args:
-        model_name: HuggingFace model identifier
+        model_name: HuggingFace model identifier (defaults to 1.5B model for lower memory)
         device_map: Device mapping strategy ("auto" recommended)
         low_cpu_mem_usage: Enable low CPU memory usage mode
         max_memory: Dict specifying max memory per device (e.g., {0: "20GiB", "cpu": "8GiB"})
@@ -36,6 +36,10 @@ def load_deepseek_r1_model(
     Raises:
         RuntimeError: If model loading fails
     """
+    # Default to smaller model for constrained environments
+    if model_name is None:
+        model_name = os.getenv("DEEPSEEK_MODEL", "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B")
+    
     print(f"Loading model: {model_name}")
     
     # Clear cache before loading

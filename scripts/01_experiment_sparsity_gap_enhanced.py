@@ -164,17 +164,22 @@ def run_experiment_1_enhanced(
     use_alternative = os.getenv("USE_ALTERNATIVE_LOADER", "false").lower() == "true"
     use_8bit = os.getenv("USE_8BIT_QUANTIZATION", "false").lower() == "true"
     
+    # Get model name from env or use default (1.5B for lower memory)
+    model_name = os.getenv("DEEPSEEK_MODEL", "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B")
+    print(f"Using model: {model_name}")
+    print()
+    
     try:
         if use_alternative:
-            model, tokenizer = load_deepseek_r1_model_alternative(use_8bit=use_8bit)
+            model, tokenizer = load_deepseek_r1_model_alternative(model_name=model_name, use_8bit=use_8bit)
         else:
-            model, tokenizer = load_deepseek_r1_model()
+            model, tokenizer = load_deepseek_r1_model(model_name=model_name)
         model.eval()
         print("✓ Model loaded successfully")
     except Exception as e:
         print(f"✗ Model loading failed: {e}")
         print("Trying alternative loader...")
-        model, tokenizer = load_deepseek_r1_model_alternative(use_8bit=True)
+        model, tokenizer = load_deepseek_r1_model_alternative(model_name=model_name, use_8bit=True)
         model.eval()
     print()
     

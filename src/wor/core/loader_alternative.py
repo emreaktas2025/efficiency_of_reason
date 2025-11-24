@@ -24,19 +24,23 @@ def get_cgroup_limit_gb():
 
 
 def load_deepseek_r1_model_alternative(
-    model_name: str = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    model_name: str = None,
     use_8bit: bool = False,
 ) -> tuple:
     """
     Alternative loader that tries 8-bit quantization or no quantization.
     
     Args:
-        model_name: HuggingFace model identifier
+        model_name: HuggingFace model identifier (defaults to 1.5B model for lower memory)
         use_8bit: If True, use 8-bit quantization instead of 4-bit
         
     Returns:
         Tuple of (model, tokenizer)
     """
+    # Default to smaller model for constrained environments
+    if model_name is None:
+        model_name = os.getenv("DEEPSEEK_MODEL", "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B")
+    
     print(f"Loading model (alternative method): {model_name}")
     
     # Clear cache

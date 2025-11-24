@@ -227,6 +227,11 @@ def run_experiment():
     # Load model
     print("Step 1: Loading model...")
     
+    # Get model name from env or use default (1.5B for lower memory)
+    model_name = os.getenv("DEEPSEEK_MODEL", "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B")
+    print(f"Using model: {model_name}")
+    print()
+    
     # Try standard loader first, fallback to alternative if it fails
     use_alternative = os.getenv("USE_ALTERNATIVE_LOADER", "false").lower() == "true"
     use_8bit_fallback = os.getenv("USE_8BIT_QUANTIZATION", "false").lower() == "true"
@@ -234,22 +239,22 @@ def run_experiment():
     try:
         if use_alternative:
             print("Using alternative loader (8-bit or no quantization)...")
-            model, tokenizer = load_deepseek_r1_model_alternative(use_8bit=use_8bit_fallback)
+            model, tokenizer = load_deepseek_r1_model_alternative(model_name=model_name, use_8bit=use_8bit_fallback)
         else:
-            model, tokenizer = load_deepseek_r1_model()
+            model, tokenizer = load_deepseek_r1_model(model_name=model_name)
         model.eval()
         print()
     except Exception as e:
         print(f"\n⚠ Standard loader failed: {e}")
         print("Trying alternative loader (8-bit quantization)...")
         try:
-            model, tokenizer = load_deepseek_r1_model_alternative(use_8bit=True)
+            model, tokenizer = load_deepseek_r1_model_alternative(model_name=model_name, use_8bit=True)
             model.eval()
             print()
         except Exception as e2:
             print(f"\n⚠ 8-bit quantization also failed: {e2}")
             print("Trying without quantization (requires more memory)...")
-            model, tokenizer = load_deepseek_r1_model_alternative(use_8bit=False)
+            model, tokenizer = load_deepseek_r1_model_alternative(model_name=model_name, use_8bit=False)
             model.eval()
             print()
     
