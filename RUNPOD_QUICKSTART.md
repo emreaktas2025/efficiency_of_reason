@@ -5,14 +5,21 @@
 After cloning the repository on RunPod, run these commands:
 
 ```bash
+# Clone the repository
 git clone https://github.com/emreaktas2025/efficiency_of_reason.git
 cd efficiency_of_reason
+
+# Pull latest changes (if you already cloned)
+git pull origin main
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Install package in editable mode (recommended)
+# Install package in editable mode (RECOMMENDED - fixes import issues)
 pip install -e .
+
+# Verify imports work
+python test_imports.py
 ```
 
 ## Run Experiment
