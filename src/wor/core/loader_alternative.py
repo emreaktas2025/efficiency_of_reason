@@ -154,37 +154,37 @@ def load_deepseek_r1_model_alternative(
                         max_shard_size="2GB",
                     )
                     print("✓ Model loaded successfully (4-bit quantized)")
-            except RuntimeError as e:
-                error_str = str(e).lower()
-                if "bad_alloc" in error_str or "memory" in error_str:
-                    print("⚠ Memory error during quantization init")
-                    print("  Trying 8-bit quantization as fallback...")
-                    # Fallback to 8-bit
-                    quantization_config = BitsAndBytesConfig(load_in_8bit=True)
-                    model = AutoModelForCausalLM.from_pretrained(
-                        model_name,
-                        quantization_config=quantization_config,
-                        device_map="auto",
-                        trust_remote_code=True,
-                        low_cpu_mem_usage=True,
-                        use_safetensors=True,
-                    )
-                elif "out of memory" in error_str or "cuda" in error_str:
-                    print("⚠ GPU OOM - trying FP16 with device_map='auto'...")
-                    # Last resort: FP16 with offloading
-                    import tempfile
-                    offload_folder = tempfile.mkdtemp(prefix="model_offload_")
-                    model = AutoModelForCausalLM.from_pretrained(
-                        model_name,
-                        device_map="auto",
-                        offload_folder=offload_folder,
-                        trust_remote_code=True,
-                        low_cpu_mem_usage=True,
-                        dtype=torch.float16,
-                        use_safetensors=True,
-                    )
-                else:
-                    raise
+                except RuntimeError as e:
+                    error_str = str(e).lower()
+                    if "bad_alloc" in error_str or "memory" in error_str:
+                        print("⚠ Memory error during quantization init")
+                        print("  Trying 8-bit quantization as fallback...")
+                        # Fallback to 8-bit
+                        quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+                        model = AutoModelForCausalLM.from_pretrained(
+                            model_name,
+                            quantization_config=quantization_config,
+                            device_map="auto",
+                            trust_remote_code=True,
+                            low_cpu_mem_usage=True,
+                            use_safetensors=True,
+                        )
+                    elif "out of memory" in error_str or "cuda" in error_str:
+                        print("⚠ GPU OOM - trying FP16 with device_map='auto'...")
+                        # Last resort: FP16 with offloading
+                        import tempfile
+                        offload_folder = tempfile.mkdtemp(prefix="model_offload_")
+                        model = AutoModelForCausalLM.from_pretrained(
+                            model_name,
+                            device_map="auto",
+                            offload_folder=offload_folder,
+                            trust_remote_code=True,
+                            low_cpu_mem_usage=True,
+                            dtype=torch.float16,
+                            use_safetensors=True,
+                        )
+                    else:
+                        raise
         elif use_8bit and not use_direct_gpu_load:
             # For systems with more RAM, use quantization if requested
             print("Attempting 8-bit quantization...")
