@@ -2,6 +2,14 @@
 
 ## Memory Issues (`std::bad_alloc`)
 
+**IMPORTANT:** If you're running in a Docker container (like RunPod), check for **cgroup memory limits**:
+
+```bash
+python scripts/check_system_limits.py
+```
+
+Even if your system has 251GB RAM, the container might be limited to ~38GB by cgroups. The loader now automatically detects and respects this limit.
+
 If you encounter `std::bad_alloc` errors when loading the model, this means the system ran out of RAM. The loader now includes automatic memory limits, but if you still have issues:
 
 ### Solution 1: Disable CPU Memory Limit (if you have enough RAM)
