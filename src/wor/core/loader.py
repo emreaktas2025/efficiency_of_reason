@@ -42,6 +42,17 @@ def load_deepseek_r1_model(
     gc.collect()
     torch.cuda.empty_cache() if torch.cuda.is_available() else None
     
+    # Check for cgroup memory limit (common in Docker/containers)
+    cgroup_limit_gb = None
+    try:
+        with open('/sys/fs/cgroup/memory/memory.limit_in_bytes', 'r') as f:
+            limit_bytes = int(f.read().strip())
+            if limit_bytes < 2**63:  # Not unlimited
+                cgroup_limit_gb = limit_bytes / (1024**3)
+                print(f"⚠ Detected cgroup memory limit: {cgroup_limit_gb:.2f} GB")
+    except:
+        pass
+    
     # Set default max_memory if not provided
     # Allow disabling ALL memory limits via environment variable for systems with lots of RAM
     disable_cpu_limit = os.getenv("DISABLE_CPU_MEMORY_LIMIT", "false").lower() == "true"
@@ -54,17 +65,24 @@ def load_deepseek_r1_model(
             gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
             max_memory[0] = f"{int(gpu_memory_gb * 0.85)}GiB"  # More conservative
         
-        # Limit CPU memory aggressively to prevent std::bad_alloc
-        # Can be disabled with DISABLE_CPU_MEMORY_LIMIT=true env var
+        # Limit CPU memory - respect cgroup limit if present
         if not disable_cpu_limit:
-            max_memory["cpu"] = "4GiB"  # Reduced from 8GiB
-            print("CPU memory limited to 4GB (set DISABLE_CPU_MEMORY_LIMIT=true to disable)")
+            if cgroup_limit_gb:
+                # Use 80% of cgroup limit, leave headroom
+                cpu_limit_gb = int(cgroup_limit_gb * 0.8)
+                max_memory["cpu"] = f"{cpu_limit_gb}GiB"
+                print(f"CPU memory limited to {cpu_limit_gb}GB (80% of cgroup limit)")
+            else:
+                max_memory["cpu"] = "4GiB"  # Default conservative limit
+                print("CPU memory limited to 4GB (set DISABLE_CPU_MEMORY_LIMIT=true to disable)")
         else:
             print("CPU memory limit disabled (DISABLE_CPU_MEMORY_LIMIT=true)")
     
     if disable_all_limits:
         max_memory = None
         print("All memory limits disabled (DISABLE_ALL_MEMORY_LIMITS=true)")
+        if cgroup_limit_gb:
+            print(f"⚠ Warning: cgroup limit ({cgroup_limit_gb:.2f} GB) may still apply!")
     
     print("Configuring 4-bit quantization (NF4)...")
     
