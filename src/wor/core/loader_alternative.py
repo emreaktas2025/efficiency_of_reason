@@ -100,32 +100,60 @@ def load_deepseek_r1_model_alternative(
         # bitsandbytes needs too much CPU RAM during init
         # 1.5B model in FP16 only needs ~3GB GPU VRAM, which should fit
         if use_direct_gpu_load:
-            print("Loading model with 4-bit quantization (no CPU memory limits)...")
-            print("  8B model needs quantization to fit - using 4-bit NF4")
-            print("  NO CPU memory limits - bitsandbytes needs RAM during init")
-            try:
-                from transformers import BitsAndBytesConfig
-                
-                # Use 4-bit quantization but NO max_memory constraints
-                # bitsandbytes needs CPU RAM during initialization - don't limit it
-                quantization_config = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.float16,
-                    bnb_4bit_use_double_quant=True,
-                    bnb_4bit_quant_type="nf4",
-                )
-                
-                model = AutoModelForCausalLM.from_pretrained(
-                    model_name,
-                    quantization_config=quantization_config,
-                    device_map="auto",  # Let it handle device placement
-                    trust_remote_code=True,
-                    low_cpu_mem_usage=True,
-                    use_safetensors=True,
-                    max_shard_size="2GB",  # Load in 2GB chunks to reduce peak CPU RAM
-                    # NO max_memory - let bitsandbytes use what it needs
-                )
-                print("✓ Model loaded successfully (4-bit quantized)")
+            # Check if it's a small model (1.5B) - load directly without quantization
+            is_small_model = "1.5B" in model_name or "qwen-1.5b" in model_name.lower()
+            
+            if is_small_model:
+                print("Loading 1.5B model directly to GPU (FP16, no quantization)...")
+                print("  NO CPU memory limits - model needs ~6GB temp RAM during load")
+                try:
+                    model = AutoModelForCausalLM.from_pretrained(
+                        model_name,
+                        device_map="cuda:0",  # Force immediate GPU load
+                        trust_remote_code=True,
+                        low_cpu_mem_usage=True,
+                        dtype=torch.float16,
+                        use_safetensors=True,
+                    )
+                    print("✓ Model loaded successfully (FP16 on GPU)")
+                except RuntimeError as e:
+                    error_str = str(e).lower()
+                    if "out of memory" in error_str or "cuda" in error_str:
+                        print("⚠ GPU OOM - trying with device_map='auto'...")
+                        model = AutoModelForCausalLM.from_pretrained(
+                            model_name,
+                            device_map="auto",
+                            trust_remote_code=True,
+                            low_cpu_mem_usage=True,
+                            dtype=torch.float16,
+                            use_safetensors=True,
+                        )
+                    else:
+                        raise
+            else:
+                # 8B model - needs quantization
+                print("Loading 8B model with 4-bit quantization (no CPU memory limits)...")
+                print("  NO CPU memory limits - bitsandbytes needs RAM during init")
+                try:
+                    from transformers import BitsAndBytesConfig
+                    
+                    quantization_config = BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_compute_dtype=torch.float16,
+                        bnb_4bit_use_double_quant=True,
+                        bnb_4bit_quant_type="nf4",
+                    )
+                    
+                    model = AutoModelForCausalLM.from_pretrained(
+                        model_name,
+                        quantization_config=quantization_config,
+                        device_map="auto",
+                        trust_remote_code=True,
+                        low_cpu_mem_usage=True,
+                        use_safetensors=True,
+                        max_shard_size="2GB",
+                    )
+                    print("✓ Model loaded successfully (4-bit quantized)")
             except RuntimeError as e:
                 error_str = str(e).lower()
                 if "bad_alloc" in error_str or "memory" in error_str:
