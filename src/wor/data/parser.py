@@ -34,12 +34,15 @@ def parse_reasoning_output(text: str) -> Dict[str, str]:
     }
     
     # Try multiple tag formats that DeepSeek-R1 might use
-    # DeepSeek-R1 models can output different tag formats depending on the version
-    # Pattern 1: <think>...</think> (common format)
-    # Pattern 2: <think>...</think> (mentioned in research plan)
-    # Pattern 3: <reasoning>...</reasoning> (alternative variant)
+    # DeepSeek-R1 models can output different formats:
+    # 1. Special tokens: |redacted_begin_of_sentence| ... |redacted_end_of_sentence|
+    # 2. XML tags: <think>...</think>
+    # 3. XML tags: <think>...</think>
     
     patterns = [
+        # Pattern 1: Special tokens (most common in actual DeepSeek-R1 output)
+        (r'\|redacted_begin_of_sentence\|(.*?)\|redacted_end_of_sentence\|', '|redacted_begin_of_sentence|', '|redacted_end_of_sentence|'),
+        # Pattern 2: XML-style tags
         (r'<think>(.*?)</think>', '<think>', '</think>'),
         (r'<think>(.*?)</think>', '<think>', '</think>'),
         (r'<reasoning>(.*?)</reasoning>', '<reasoning>', '</reasoning>'),

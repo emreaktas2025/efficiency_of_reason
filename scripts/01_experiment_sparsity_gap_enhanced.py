@@ -84,11 +84,35 @@ def find_segment_token_indices(
     full_tokens = tokenizer(full_text, add_special_tokens=True, return_tensors="pt")
     token_ids = full_tokens["input_ids"][0]
     
-    # Find tag positions
-    think_start_tag = "<think>"
-    think_end_tag = "</think>"
+    # Find tag positions - support multiple formats
+    # Try special tokens first (|redacted_begin_of_sentence|)
+    think_start_tag = "|redacted_begin_of_sentence|"
+    think_end_tag = "|redacted_end_of_sentence|"
     
-    if think_start_tag in full_text and think_end_tag in full_text:
+    if think_start_tag in full_text:
+        # Check if end tag exists, if not, try to find where reasoning ends
+        if think_end_tag in full_text:
+            # Both tags present
+            tag_start_pos = full_text.find(think_start_tag)
+            tag_end_pos = full_text.find(think_end_tag) + len(think_end_tag)
+        else:
+            # Only start tag - reasoning might continue until a clear break
+            # For now, treat everything after start tag as reasoning until we see a pattern
+            tag_start_pos = full_text.find(think_start_tag)
+            # Look for potential end markers or use a heuristic
+            # Common pattern: reasoning ends before the final answer
+            tag_end_pos = len(full_text)  # Temporary: use full length
+    elif "<think>" in full_text and "</think>" in full_text:
+        # Fallback to XML tags
+        think_start_tag = "<think>"
+        think_end_tag = "</think>"
+        tag_start_pos = full_text.find(think_start_tag)
+        tag_end_pos = full_text.find(think_end_tag) + len(think_end_tag)
+    else:
+        tag_start_pos = -1
+        tag_end_pos = -1
+    
+    if tag_start_pos != -1:
         tag_start_pos = full_text.find(think_start_tag)
         tag_end_pos = full_text.find(think_end_tag) + len(think_end_tag)
         
@@ -238,9 +262,9 @@ def run_experiment_1_enhanced(
                 # Debug: print first skipped output to see what format we're getting
                 if skipped_no_reasoning == 1:
                     print(f"\n⚠ Warning: Generated output doesn't contain reasoning tags.")
-                    print(f"  First {min(200, len(generated))} chars of output:")
-                    print(f"  {repr(generated[:200])}")
-                    print(f"  Looking for: <think>...</think>")
+                    print(f"  Full generated text ({len(generated)} chars):")
+                    print(f"  {repr(generated[:1000])}")  # Show first 1000 chars
+                    print(f"  Looking for: |redacted_begin_of_sentence|, <think>, or <think> tags")
                 continue
             
             # Get attention states
