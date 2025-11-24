@@ -24,6 +24,19 @@ Even if your host system has 251GB RAM, the container might be limited to ~38GB 
 
 ### Solutions (In Order of Preference)
 
+#### Quick fix for `std::bad_alloc` on 1.5B models
+
+- The alternative loader now uses a safer streaming path with explicit CPU/GPU limits.
+- If your host has plenty of RAM but cgroup detection is misleading, bypass it:
+
+```bash
+export SKIP_CGROUP_LIMIT_CHECK=true   # ignore the 38GB cgroup file
+export USE_ALTERNATIVE_LOADER=true    # use the safer loader
+python scripts/01_experiment_sparsity_gap_enhanced.py --num-problems 5
+```
+
+If the direct FP16 stream still fails, set `USE_8BIT_QUANTIZATION=true` to force the fallback.
+
 #### Solution 1: Use 8-bit Quantization (RECOMMENDED for 32-48GB RAM containers)
 
 8-bit quantization is more reliable than 4-bit for memory-constrained environments:
@@ -114,4 +127,3 @@ If the model doesn't use GPU:
 1. Check CUDA availability: `python -c "import torch; print(torch.cuda.is_available())"`
 2. Verify GPU: `nvidia-smi`
 3. Make sure you're using a GPU-enabled RunPod instance
-

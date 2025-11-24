@@ -48,41 +48,42 @@ def load_deepseek_r1_model_alternative(
     gc.collect()
     torch.cuda.empty_cache() if torch.cuda.is_available() else None
     
-    # Check cgroup limits
-    cgroup_limit_gb = get_cgroup_limit_gb()
+    # Check cgroup limits (can be bypassed if misleading)
+    skip_cgroup_check = os.getenv("SKIP_CGROUP_LIMIT_CHECK", "false").lower() == "true"
+    cgroup_limit_gb = None if skip_cgroup_check else get_cgroup_limit_gb()
     if cgroup_limit_gb:
         print(f"⚠ Detected cgroup memory limit: {cgroup_limit_gb:.2f} GB")
+    elif skip_cgroup_check:
+        print("⚠ SKIP_CGROUP_LIMIT_CHECK=true -> ignoring cgroup memory limit file")
     
-    # For constrained containers, load directly to GPU WITHOUT any CPU memory limits
-    # The model loading process needs temporary CPU RAM to process weights before GPU transfer
-    # Setting max_memory limits causes std::bad_alloc even for small models
+    # Detect constrained containers (e.g., RunPod with 32-48GB RAM) and switch to a
+    # more defensive loading path to avoid std::bad_alloc during weight streaming.
     use_direct_gpu_load = cgroup_limit_gb and cgroup_limit_gb < 48
-    
-    if use_direct_gpu_load:
-        # NO memory constraints - let the system use what it needs during loading
-        max_memory = None
-        offload_folder = None
-        print("⚠ Low memory container - loading directly to GPU")
-        print("  NO CPU memory limits (model needs ~6GB temp RAM during load)")
-        print("  Loading straight to GPU (FP16) - will use ~3GB VRAM")
-    else:
-        # Build max_memory constraints only for systems with more RAM
-        max_memory = {}
+
+    def build_safe_limits(limit_gb):
+        """Construct conservative max_memory/offload settings to avoid spikes."""
+        limits = {}
         if torch.cuda.is_available():
             gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-            max_memory[0] = f"{int(gpu_memory_gb * 0.85)}GiB"
-        
-        if cgroup_limit_gb:
-            cpu_limit_gb = int(cgroup_limit_gb * 0.5)
-            max_memory["cpu"] = f"{cpu_limit_gb}GiB"
+            limits[0] = f"{int(gpu_memory_gb * 0.8)}GiB"
+        if limit_gb:
+            cpu_limit_gb = max(6, int(limit_gb * 0.6))
+            limits["cpu"] = f"{cpu_limit_gb}GiB"
         else:
-            max_memory["cpu"] = "8GiB"
-        
-        print(f"Max memory settings: {max_memory}")
-        
-        # Create offload folder
-        offload_folder = tempfile.mkdtemp(prefix="model_offload_")
-        print(f"Using offload folder: {offload_folder}")
+            limits["cpu"] = "8GiB"
+        folder = tempfile.mkdtemp(prefix="model_offload_")
+        print(f"Max memory settings: {limits}")
+        print(f"Using offload folder: {folder}")
+        return limits, folder
+    
+    if use_direct_gpu_load:
+        # Previously we loaded without limits, but that can trigger std::bad_alloc in
+        # constrained containers. Stream with conservative limits instead.
+        print("⚠ Low memory container - using constrained streaming load to avoid bad_alloc")
+        max_memory, offload_folder = build_safe_limits(cgroup_limit_gb or 24)
+    else:
+        # Build max_memory constraints only for systems with more RAM
+        max_memory, offload_folder = build_safe_limits(cgroup_limit_gb)
     
     # Load tokenizer
     print("Loading tokenizer...")
@@ -104,31 +105,35 @@ def load_deepseek_r1_model_alternative(
             is_small_model = "1.5B" in model_name or "qwen-1.5b" in model_name.lower()
             
             if is_small_model:
-                print("Loading 1.5B model directly to GPU (FP16, no quantization)...")
+                print("Loading 1.5B model with constrained streaming (FP16, no quantization)...")
                 print("  Using max_shard_size to load in smaller chunks (reduces peak CPU RAM)")
                 try:
                     # Use max_shard_size to load in 500MB chunks - reduces peak CPU RAM
                     model = AutoModelForCausalLM.from_pretrained(
                         model_name,
-                        device_map="cuda:0",  # Force immediate GPU load
+                        device_map="auto",
                         trust_remote_code=True,
                         low_cpu_mem_usage=True,
                         dtype=torch.float16,
                         use_safetensors=True,
+                        max_memory=max_memory,
+                        offload_folder=offload_folder,
                         max_shard_size="500MB",  # Load in 500MB chunks
                     )
-                    print("✓ Model loaded successfully (FP16 on GPU)")
+                    print("✓ Model loaded successfully (FP16 with constrained streaming)")
                 except RuntimeError as e:
                     error_str = str(e).lower()
                     if "bad_alloc" in error_str or "memory" in error_str:
                         print("⚠ Still hitting memory limit - trying even smaller chunks (200MB)...")
                         model = AutoModelForCausalLM.from_pretrained(
                             model_name,
-                            device_map="cuda:0",
+                            device_map="auto",
                             trust_remote_code=True,
                             low_cpu_mem_usage=True,
                             dtype=torch.float16,
                             use_safetensors=True,
+                            max_memory=max_memory,
+                            offload_folder=offload_folder,
                             max_shard_size="200MB",  # Even smaller chunks
                         )
                     elif "out of memory" in error_str or "cuda" in error_str:
@@ -140,14 +145,29 @@ def load_deepseek_r1_model_alternative(
                             low_cpu_mem_usage=True,
                             dtype=torch.float16,
                             use_safetensors=True,
+                            max_memory=max_memory,
+                            offload_folder=offload_folder,
                             max_shard_size="500MB",
                         )
                     else:
-                        raise
+                        print("⚠ Direct FP16 load failed - falling back to 8-bit quantization...")
+                        from transformers import BitsAndBytesConfig
+                        
+                        quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+                        model = AutoModelForCausalLM.from_pretrained(
+                            model_name,
+                            quantization_config=quantization_config,
+                            device_map="auto",
+                            trust_remote_code=True,
+                            low_cpu_mem_usage=True,
+                            use_safetensors=True,
+                            max_memory=max_memory,
+                            offload_folder=offload_folder,
+                            max_shard_size="200MB",
+                        )
             else:
                 # 8B model - needs quantization
-                print("Loading 8B model with 4-bit quantization (no CPU memory limits)...")
-                print("  NO CPU memory limits - bitsandbytes needs RAM during init")
+                print("Loading 8B model with 4-bit quantization (constrained limits)...")
                 try:
                     from transformers import BitsAndBytesConfig
                     
@@ -165,6 +185,8 @@ def load_deepseek_r1_model_alternative(
                         trust_remote_code=True,
                         low_cpu_mem_usage=True,
                         use_safetensors=True,
+                        max_memory=max_memory,
+                        offload_folder=offload_folder,
                         max_shard_size="2GB",
                     )
                     print("✓ Model loaded successfully (4-bit quantized)")
@@ -182,6 +204,8 @@ def load_deepseek_r1_model_alternative(
                             trust_remote_code=True,
                             low_cpu_mem_usage=True,
                             use_safetensors=True,
+                            max_memory=max_memory,
+                            offload_folder=offload_folder,
                         )
                     elif "out of memory" in error_str or "cuda" in error_str:
                         print("⚠ GPU OOM - trying FP16 with device_map='auto'...")
@@ -289,4 +313,3 @@ def load_deepseek_r1_model_alternative(
             print("="*80 + "\n")
         
         raise
-
