@@ -18,8 +18,16 @@ This project analyzes DeepSeek-R1-Distill-Llama-8B to measure structural differe
 
 ### Installation
 
+**Option 1: Install as package (Recommended)**
 ```bash
 pip install -r requirements.txt
+pip install -e .
+```
+
+**Option 2: Install dependencies only**
+```bash
+pip install -r requirements.txt
+# Then run scripts from project root
 ```
 
 ## Project Structure
@@ -46,7 +54,14 @@ This experiment tests whether reasoning traces (inside `<think>` tags) have lowe
 
 Note: DeepSeek-R1 uses `<think>` tags (the model's actual output format).
 
+**If installed as package:**
 ```bash
+python scripts/01_run_sparsity_gap.py
+```
+
+**If not installed, run from project root:**
+```bash
+cd /path/to/efficiency_of_reason
 python scripts/01_run_sparsity_gap.py
 ```
 
